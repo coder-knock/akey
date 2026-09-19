@@ -74,6 +74,12 @@ A reference is `akey://[vault/]item[/section]/field`. The item may be a name or 
 stdout carries data only; the error envelope goes to stderr:
 `{"ok":false,"error":{"code":…,"hint":…}}`.
 
+## Masking has a floor
+
+`run` replaces any secret the child prints with `<concealed by akey>` — but only values of **8
+characters or more**. Shorter ones are left alone on purpose, so ordinary output is not turned into
+mosaic. A short secret is therefore not concealed; treat it as if it were printed in the clear.
+
 ## Never
 
 - `akey read` / `get --reveal` / `export` → plaintext in your context, unrecoverable. Inject instead.

@@ -80,6 +80,11 @@ even if it runs `printenv`. This exists to stop *you* from seeing plaintext by a
 `--no-masking` turns it off, but **only use it for interactive child processes** (it also gives up
 the pipes and keeps the TTY).
 
+**Values shorter than 8 characters are not masked.** Masking them would turn ordinary output into
+mosaic — `true`, `0`, `prod`, `us-east-1` all appear in real logs — so the masker ignores anything
+below that length, and a short secret therefore reaches the caller in the clear. Do not assume a
+6-character PIN or code is protected by `run`; store and use secrets of 8 characters or more.
+
 ### Two exceptions for `run`
 
 - **It emits no `--json` envelope.** stdout belongs to the child; passing `--json` changes nothing.

@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a capability, or argue that an existing one should change
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        Describe the situation you are in, not the solution you have in mind. What are you trying to
+        do, and where does `akey` get in the way today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: The behaviour you want, and what it would let you stop doing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: |
+        Workarounds, other tools, or a different shape of the same feature. If an existing command
+        almost does it, say which and where it falls short.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: contract
+    attributes:
+      label: Does this change a contract?
+      description: |
+        `AGENTS.md` lists what is frozen: on-disk formats, exit codes, `error.code` strings, the
+        `--json` envelope. Changing one is allowed, but it is a deliberate decision with a migration
+        story rather than a side effect.
+      options:
+        - No — it adds something new
+        - It changes existing behaviour, but no frozen contract
+        - It changes a frozen contract
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Links, prior art, or a sketch. Optional.
+    validations:
+      required: false

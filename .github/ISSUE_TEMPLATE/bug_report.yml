@@ -1,0 +1,73 @@
+name: Bug report
+description: Something behaves differently from what the documentation says
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste secrets, vault contents, or a real `akey` reference string into this form.**
+        Issue text is public and permanent. Replace every secret with something like `<REDACTED>`,
+        and if a command's output contains a value, cut it out rather than trimming around it.
+
+        A security problem does **not** belong here — see [SECURITY.md](../SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: akey version
+      description: Output of `akey --version`.
+      placeholder: akey 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture. If you built from source, add `rustc --version`.
+      placeholder: macOS 15.2 arm64 / Ubuntu 24.04 x86_64 / Windows 11 x86_64
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behaviour, with the command you ran and its output.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: If the documentation says it should do something else, quote or link it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The smallest sequence that shows the problem, starting from a fresh vault if you can.
+        `AKEY_HOME=$(mktemp -d)/akey` gives you a throwaway vault that cannot touch your real one.
+      placeholder: |
+        export AKEY_HOME=$(mktemp -d)/akey
+        akey init --device testbox
+        printf 'credential=<REDACTED>\n' | akey set openai --category apikey --stdin
+        akey <command that misbehaves>
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`akey doctor --json` output"
+      description: |
+        Often enough to diagnose it on its own. It reports paths, permissions and recipient state —
+        **check it before pasting**, and remove anything you would not want public.
+      render: json
+    validations:
+      required: false

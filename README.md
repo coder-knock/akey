@@ -4,22 +4,34 @@
 [![release](https://img.shields.io/github/v/release/coder-knock/akey?include_prereleases&sort=semver)](https://github.com/coder-knock/akey/releases)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**An encrypted credential vault for AI agents.** One Rust binary. No daemon, no server.
-Ciphertext syncs between your machines through a git remote you already own.
+**An encrypted credential vault for AI agents.** One Rust binary. No daemon, no server. Ciphertext
+syncs between your machines through a git remote you already own.
 
-It solves one problem: **let an agent use a secret without ever seeing it.**
+> ```bash
+> akey run --with OPENAI_API_KEY=akey://openai/credential -- curl -sS https://api.openai.com/v1/models
+> ```
+>
+> The child process gets the real value. The agent's stdout gets `<concealed by akey>`.
 
-```bash
-# The agent needs OpenAI. The plaintext never enters its context.
-akey run --with OPENAI_API_KEY=akey://openai/credential -- \
-  curl -sS https://api.openai.com/v1/models
-```
-
-The child process gets the real value. The agent's stdout gets `<concealed by akey>`.
+That is the whole product: **an agent can use a secret without ever seeing it.** A `.env` file can
+only promise the opposite — the moment the agent reads the variable, the plaintext is in its
+context, and in every log and transcript that follows.
 
 > 中文文档：[README.zh-CN.md](README.zh-CN.md) · [docs/AGENT-INTEGRATION.zh-CN.md](docs/AGENT-INTEGRATION.zh-CN.md)
 
 ---
+
+## Why not a plaintext `.env`
+
+| | plaintext `.env` | akey |
+|---|---|---|
+| The AI reads the key | Yes — and once it is in the context, it is gone for good | No. Only the child process gets it |
+| Several machines | Sync by hand | `akey sync` |
+| Encryption at rest | None | age: X25519 + ChaCha20-Poly1305 |
+| Laptop stolen | Rotate every key | `akey devices rm <that one>` — it stops working immediately |
+| Least privilege for CI | Hand over the full key | `akey token create --allow openai --ttl 30d` |
+| A compromised remote | Everything leaks | Only a directory entry is added; no ciphertext follows |
+| Audit trail | None | `akey log` |
 
 ## Install
 
@@ -42,55 +54,38 @@ irm https://raw.githubusercontent.com/coder-knock/akey/main/install.ps1 | iex
 cargo install --git https://github.com/coder-knock/akey --locked
 ```
 
-Installer options — `--version <tag>`, `--dir <path>`, `--from-source`, `--force` — and the
-equivalent `AKEY_*` environment variables are documented at the top of
-[`install.sh`](install.sh) / [`install.ps1`](install.ps1).
-
 | Platform | Prebuilt | Notes |
 |---|---|---|
 | macOS arm64 / x86_64 | yes | |
 | Linux x86_64 / aarch64 | yes | static musl — runs on any distro regardless of glibc |
 | Windows x86_64 / arm64 | yes | not yet exercised end to end; see [Status](#status) |
-| anything else | — | `cargo install --git`, or `install.sh --from-source` |
 
-The only runtime dependency is `git`, and only for `sync`. Every other command works offline.
+Anything else: `cargo install --git …`, or `install.sh --from-source`. The only runtime dependency
+is `git`, and only for `sync` — every other command works offline.
+
+Both installers take `--version <tag>`, `--dir <path>`, `--from-source`, and `--force`, and honour
+`AKEY_VERSION`, `AKEY_INSTALL_DIR`, and `AKEY_HOME`. Run either with `--help` for the rest.
 
 ## Five-minute start
 
 ```bash
-# 1. Create a vault. Omit --remote for a purely local one.
+# 1. Create a vault. Omit --remote for a purely local one; --recovery lets you
+#    attach a new machine later with one passphrase.
 akey init --remote git@github.com:you/akey-vault.git --device macbook --recovery
-#    --recovery lets you attach a new machine later with one passphrase
 
-# 2. Store a key — the secret goes over stdin, so it never lands in your shell history
-printf 'credential=sk-...\n' | akey set openai --category apikey --stdin
+# 2. Store a key. The secret goes over stdin, so it never lands in your shell history.
+printf 'credential=sk-proj-9f2a7c1e4b\n' | akey set openai --category apikey --stdin
 
-# 3. See what you have (metadata only, never values)
+# 3. See what you have — metadata only, never values.
 akey list
 
 # 4. Use it. This is the pose that matters.
-akey run --with OPENAI_API_KEY=akey://openai/credential -- \
-  curl -sS -H "Authorization: Bearer $OPENAI_API_KEY" https://api.openai.com/v1/models
+akey run --with OPENAI_API_KEY=akey://openai/credential -- curl -sS https://api.openai.com/v1/models
 
-# 5. Move to another machine
+# 5. Move to another machine, then approve it on every machine that already has the vault.
 akey init --from git@github.com:you/akey-vault.git --device laptop   # asks for the recovery passphrase
-#    then, on every machine that already had the vault:
 akey devices trust laptop
 ```
-
----
-
-## Why not a plaintext `.env`
-
-| | plaintext `.env` | akey |
-|---|---|---|
-| The AI reads the key | Yes — and once it is in the context, it is gone for good | No. Only the child process gets it |
-| Several machines | Sync by hand | `akey sync` |
-| Encryption at rest | None | age: X25519 + ChaCha20-Poly1305 |
-| Laptop stolen | Rotate every key | `akey devices rm <that one>` — it stops working immediately |
-| Least privilege for CI | Hand over the full key | `akey token create --allow openai --ttl 30d` |
-| A compromised remote | Everything leaks | Only a directory entry is added; no ciphertext follows |
-| Audit trail | None | `akey log` |
 
 ## Command index
 
@@ -102,48 +97,43 @@ akey devices trust laptop
 | Operations | `whoami` · `doctor` · `log` · `schema` · `completion` |
 | Migration | `export` · `import` |
 
-The machine-readable equivalent is `akey schema --json`. This README deliberately does not
-duplicate it — **agents should treat `schema` as the source of truth.**
+For flags and arguments, ask the tool: **`akey schema --json` is the authority**, and agents should
+treat it as such. This table is for a human deciding whether any of it is useful.
 
 ### Language
 
-Human-readable text is localized; machine-readable output never is.
+Human-readable text is localized; `--json` never is, so an agent branches on `error.code` rather
+than on prose.
 
 ```bash
-akey --lang zh-CN list       # explicit
-AKEY_LANG=zh-CN akey list     # or via the environment
-akey list                     # otherwise $LC_ALL / $LC_MESSAGES / $LANG, else en
+akey --lang zh-CN list     # explicit; or AKEY_LANG=zh-CN, or $LC_ALL / $LC_MESSAGES / $LANG
 ```
 
-`--json` is byte-identical in every language — an agent branches on `error.code` and stable
-keys, never on prose. The one exception is `akey schema`, whose `summary` and `args[].help` are
-the same strings `--help` prints and therefore follow `--lang`; every other payload is stable.
-An explicit `--lang` that names no supported language is refused with exit 2 rather than silently
-downgraded; an unrecognized *locale* falls back to English, because most of the world's locales
-are not a request for anything specific.
-
-English is the source language and is complete. Chinese covers the help text, the hints, and the
-strings converted so far; unconverted text stays English rather than going missing, since every
-message carries all languages as a value.
+`en` and `zh-CN` are supported. The one payload that does follow `--lang` is `akey schema`, whose
+descriptions *are* the `--help` strings. Full contract in [DESIGN.md §16](DESIGN.md).
 
 ## Security model
 
-1. **Each device holds its own X25519 private key**, stored only locally and never in git. The
-   vault is encrypted to every device that is both an active recipient and locally approved.
-2. **No KDF on the hot path.** Day-to-day commands are X25519 + ChaCha20-Poly1305 — microseconds.
-   scrypt runs only during `init` and `recovery`, at roughly one second per guess for an attacker.
-3. **Revealing plaintext is explicit and refusable.** `get` conceals by default; `read` is the
-   plaintext channel. Both are gated by per-entry policy, `AKEY_NO_REVEAL`, and capability tokens.
-4. **The remote does not decide who can read.** `recipients.json` is a directory of who exists;
-   the list of who may decrypt lives in your local config and never leaves the machine. Someone who
-   compromises the remote can add a public key there — it will be reported as pending and receive
-   nothing until a human runs `akey devices trust`.
+**Each device holds its own X25519 private key**, stored only locally and never in git. The vault is
+encrypted to every device that is both an active recipient and locally approved.
+
+**No KDF on the hot path.** Day-to-day commands are X25519 + ChaCha20-Poly1305 — microseconds.
+scrypt runs only during `init` and `recovery`, at roughly one second per guess for an attacker.
+
+**Revealing plaintext is explicit, and refusable.** `get` conceals by default; `read` is the
+plaintext channel. Both are gated by per-entry policy, `AKEY_NO_REVEAL`, and capability tokens.
+
+**Masking covers secrets of 8 characters or more.** A shorter value is left alone, because masking
+it would turn ordinary output into mosaic — `true`, `0`, `prod`, `us-east-1` all show up in real
+logs. So a short secret is not concealed by `run`; treat it as printed in the clear.
+
+**The remote does not decide who can read.** `recipients.json` is a directory of who exists; the
+list of who may decrypt lives in your local config and never leaves the machine. Someone who
+compromises the remote can add a public key there — it is reported as pending and receives nothing
+until a human runs `akey devices trust`.
 
 Lost laptop: `akey devices rm <name>` re-encrypts on the next sync. That machine can never open a
 new revision again.
-
-The threat model, nine attack simulations, and every finding with its status are in
-[docs/SECURITY.md](docs/SECURITY.md).
 
 ## Documentation
 
@@ -151,7 +141,7 @@ The threat model, nine attack simulations, and every finding with its status are
 |---|---|---|
 | **[docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)** | **AI agents** | How to integrate, how to recover from each exit code, what never to do |
 | **[SKILL.md](SKILL.md)** | **agent harnesses** | The same material as a loadable skill definition |
-| **[docs/SECURITY.md](docs/SECURITY.md)** | **security reviewers** | Threat model, attack simulations, findings and their status |
+| **[docs/SECURITY.md](docs/SECURITY.md)** | **security reviewers** | Threat model, nine attack simulations, findings and their status |
 | [AGENTS.md](AGENTS.md) | agents **changing** akey | Architecture, conventions, frozen contracts |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | humans | Requirements and external contracts, incl. a feature-by-feature 1Password CLI comparison |
 | [DESIGN.md](DESIGN.md) | humans | Data model, on-disk formats, algorithms, error taxonomy |
@@ -165,32 +155,24 @@ agent-facing and landing documents are bilingual.
 
 ## Diagrams
 
-Three diagrams, each in English and Chinese. Every one is generated from a checked-in JSON spec,
-so it is regenerated rather than hand-edited, and each ships as a standalone HTML file with inline
-SVG — open it in a browser for pan, zoom, search, relationship tracing, dark/light, and PNG or SVG
-export. The images below are the same figures, rendered for reading.
-
-### Architecture
-
 ![akey architecture](docs/diagrams/akey-architecture.en.png)
 
-Components and the two trust boundaries: what lives in `$AKEY_HOME` and never enters git, versus
-what leaves the machine as ciphertext. The return path from the child process through the masker is
-drawn explicitly, because `run` handing the caller *masked* output is the whole point.
+**Architecture** — components and the two trust boundaries: what lives in `$AKEY_HOME` and never
+enters git, versus what leaves as ciphertext. The return path from the child through the masker is
+drawn explicitly.
 
-### Sync workflow
+<details>
+<summary>Sync workflow and run sequence — previews and all six files</summary>
 
 ![akey sync workflow](docs/diagrams/akey-sync-workflow.en.png)
 
-`akey sync` across two machines, as lanes and phases. The three convergence paths (equal or ahead,
-behind, diverged) are separate, and the revocation guard runs before `reset --hard`.
-
-### Run sequence
+**Sync workflow** — `akey sync` across two machines: three convergence paths kept apart, and the
+revocation guard placed before `reset --hard`.
 
 ![akey run sequence](docs/diagrams/akey-run-sequence.en.png)
 
-`akey run` message by message, including the two orderings that are load-bearing — authorization
-before decryption, and masking before anything reaches the caller — plus exit-code passthrough.
+**Run sequence** — `akey run` message by message: authorization before decryption, and masking
+before anything reaches the caller.
 
 | | English | 中文 |
 |---|---|---|
@@ -198,22 +180,26 @@ before decryption, and masking before anything reaches the caller — plus exit-
 | Sync workflow | [HTML](docs/diagrams/akey-sync-workflow.en.html) · [spec](docs/diagrams/akey-sync-workflow.en.json) | [HTML](docs/diagrams/akey-sync-workflow.zh-CN.html) · [规格](docs/diagrams/akey-sync-workflow.zh-CN.json) |
 | Run sequence | [HTML](docs/diagrams/akey-run-sequence.en.html) · [spec](docs/diagrams/akey-run-sequence.en.json) | [HTML](docs/diagrams/akey-run-sequence.zh-CN.html) · [规格](docs/diagrams/akey-run-sequence.zh-CN.json) |
 
-See [docs/diagrams/README.md](docs/diagrams/README.md) for the regeneration commands.
+</details>
+
+Every figure is generated from the JSON spec beside it and ships as a standalone HTML file with
+inline SVG — open one in a browser for pan, zoom, search, relationship tracing, dark/light, and
+PNG or SVG export. Regeneration commands: [docs/diagrams/README.md](docs/diagrams/README.md).
 
 ## Status
 
-Crate version 0.1.0. The CLI is complete and usable: **195 unit + 45 contract + 11 end-to-end
-tests**, `cargo clippy` clean, ~4 MB static release binary, worst-case vault read 54 ms on a
+**Available now.** The CLI is complete: **195 unit + 45 contract + 11 end-to-end tests**,
+`cargo clippy` clean, a ~4 MB static release binary, and a worst-case vault read of 54 ms on a
 1000-entry vault against a 100 ms budget.
 
-**Windows** builds and its unit tests pass, and the release workflow ships binaries for it. The
-end-to-end suite drives a POSIX shell (`sh -c`, `chmod`, `/dev/null`) and is gated to Unix, so
-Windows currently has compile-level and unit-level coverage rather than a proven end-to-end path.
-Porting that harness is the next step there; per-file ACLs are likewise not set, and the code
-instead requires the vault home to live inside the user profile.
+**Platform support.** macOS and Linux are exercised end to end. Windows builds, its unit tests
+pass, and the release workflow ships binaries for it — but the end-to-end suite drives a POSIX shell
+(`sh -c`, `chmod`, `/dev/null`) and is gated to Unix, so Windows has compile-level and unit-level
+coverage rather than a proven end-to-end path. Per-file ACLs are likewise not set; the code instead
+requires the vault home to live inside the user profile.
 
-A desktop GUI (gpuix) is the next milestone. `akey mcp` already lets an agent mount the vault
-directly — metadata only, never values.
+**Roadmap.** Porting that Windows harness is next. A desktop GUI (gpuix) follows; in the meantime
+`akey mcp` already lets an agent mount the vault directly — metadata only, never values.
 
 ## License
 

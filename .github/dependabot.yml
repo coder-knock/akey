@@ -1,0 +1,55 @@
+# Dependency updates.
+#
+# Grouped rather than one pull request per crate: this project pins a small, deliberately chosen
+# dependency set, and a burst of individual PRs would bury the one that matters. Security updates
+# are never grouped away — GitHub raises those separately regardless of this file.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: scope
+    groups:
+      # The cryptography stack is reviewed as a unit: `age` and its primitives move together, and a
+      # change here deserves one focused review rather than three scattered ones.
+      crypto:
+        patterns:
+          - "age"
+          - "aes*"
+          - "chacha20*"
+          - "poly1305*"
+          - "argon2"
+          - "scrypt"
+          - "rand*"
+          - "subtle"
+          - "zeroize"
+      # Everything else, so a routine bump does not need its own pull request.
+      routine:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "age"
+          - "aes*"
+          - "chacha20*"
+          - "poly1305*"
+          - "argon2"
+          - "scrypt"
+          - "rand*"
+          - "subtle"
+          - "zeroize"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "build"
+    groups:
+      actions:
+        patterns:
+          - "*"
