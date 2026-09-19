@@ -23,8 +23,9 @@
 is enforced at every encryption, and no plaintext ever reaches disk or the repository. The weak
 links are **policy enforcement on the CLI surface** and **the trust placed in `recipients.json`**.
 
-Of the 16 findings, 12 were fixed during this assessment and now have regression tests. One is
-**open and serious** (A1) and needs a product decision, not a patch — §5.
+Of the 16 findings, **13 were fixed** during this assessment (most with regression tests), two are
+documented trade-offs, and one is **open and serious** (A1) — it needs a product decision, not a
+patch. See §5.
 
 ---
 
@@ -173,7 +174,7 @@ directly.
 | A11 | Low | Weak recovery passphrase accepted from env/stdin; the length floor only applied to the TTY path | Fixed + test |
 | A12 | Low | `recovery rotate` was a silent no-op non-interactively (both reads hit the same env var) | Fixed + test |
 | A13 | Low | Two `recovery set` runs accumulated bootstrap identities | Fixed + test |
-| A14 | Info | Dead surface: `Config.reveal_allowed`, `--debug`, `doctor --agent` have no effect | Open (trivial) |
+| A14 | Info | Dead surface: `Config.reveal_allowed` was documented but never read; `--debug` and `doctor --agent` did nothing; assignment parsing rejected the `field[[type]]` form the design document specified | Fixed |
 | A15 | Info | Metadata: device names, commit timestamps, approximate entry count (by ciphertext size) | By design |
 | A16 | Info | Masking is a guardrail, not a sandbox (§3.6); TOTP codes are displayed by design | By design |
 
