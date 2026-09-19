@@ -21,6 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Formatting first: it is the cheapest check and the one most likely to fail on a fresh
+      # contribution, so it should not wait behind a full build.
+      - name: Formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+
       - name: Build
         run: cargo build --locked --all-targets
 
@@ -36,11 +42,14 @@ jobs:
         if: runner.os != 'Windows'
         run: cargo test --locked --test contract --test e2e_sync
 
-      # The installers are what most users actually run, so a syntax error in one is a
-      # broken release. Parsing is cheap here; release.yml runs install.ps1 for real.
-      - name: install.sh parses
+      # The installers are what most users actually run. install.sh's behaviour is tested for
+      # real (with cargo and curl stubbed, so nothing is built or fetched); release.yml goes
+      # further and runs both installers against a freshly built archive.
+      - name: install.sh
         if: runner.os != 'Windows'
-        run: sh -n install.sh
+        run: |
+          sh -n install.sh
+          sh tests/installer.sh
 
       - name: install.ps1 parses
         if: runner.os == 'Windows'
@@ -54,3 +63,29 @@ jobs:
             exit 1
           }
           Write-Host 'install.ps1 parses'
+
+  # `rust-version` in Cargo.toml is a promise to users, so it is built rather than asserted. The
+  # crate needs 1.85 for edition 2024; anything newer only shows up here.
+  msrv:
+    name: rust 1.85 (MSRV)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the minimum supported toolchain
+        run: rustup toolchain install 1.85 --profile minimal
+      - name: Build
+        run: cargo +1.85 build --locked --all-targets
+
+  # Advisories against the dependency tree. Not part of `test`: this is the one check whose failure
+  # is usually not the author's fault, and it should be readable as its own signal.
+  audit:
+    name: advisories
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
