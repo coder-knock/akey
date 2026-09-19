@@ -203,10 +203,20 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+
+          # Files at the top level of dist/, never the unpacked directories the packaging step
+          # also leaves there. `dist/*` would hand gh(1) a directory, and `--clobber` deletes the
+          # existing assets before it reaches the argument that fails — so a glob here does not
+          # fail safe, it strips the release and leaves it broken.
+          mapfile -t assets < <(find dist -maxdepth 1 -type f | sort)
+          [ "${#assets[@]}" -gt 0 ] || { echo "no release assets found in dist/"; exit 1; }
+          printf 'publishing:\n'
+          printf '  %s\n' "${assets[@]}"
+
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/* --clobber
+            gh release upload "$tag" "${assets[@]}" --clobber
           else
-            gh release create "$tag" dist/* \
+            gh release create "$tag" "${assets[@]}" \
               --title "$tag" \
               --generate-notes \
               --verify-tag
