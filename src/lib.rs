@@ -1,11 +1,12 @@
-//! akey —— 供 AI 使用的加密凭证库。
+//! akey — a credential vault for AI agents.
 //!
-//! 分层：`vault`(数据) → `crypto`(加解密) → `reference`(寻址) → `inject`(交付) → `cmd`(命令面)。
-//! 契约细节见仓库根的 `REQUIREMENTS.md` / `DESIGN.md`。
+//! Layers: `vault` (data) → `crypto` (cryptography) → `reference` (addressing) → `inject` (delivery) → `cmd` (command surface).
+//! See `REQUIREMENTS.md` / `DESIGN.md` at the repo root for the contract details.
 
-// 测试里用 `.err().expect(..)` 而非 `unwrap_err()` 是有意的：`unwrap_err()` 要求
-// `Ok` 类型实现 `Debug`，而 `DeviceIdentity` / `age::x25519::Identity` 这类
-// 握着秘密的类型刻意不实现 Debug，免得被 `{:?}` 顺手打印出去。
+// Using `.err().expect(..)` instead of `unwrap_err()` in tests is deliberate: `unwrap_err()`
+// requires the `Ok` type to implement `Debug`, and secret-holding types such as
+// `DeviceIdentity` / `age::x25519::Identity` deliberately do not implement Debug, lest
+// `{:?}` print them out in passing.
 #![cfg_attr(test, allow(clippy::err_expect))]
 
 pub mod agents_md;

@@ -1,7 +1,7 @@
-//! 随二进制分发的 agent 说明书。
+//! Agent documentation shipped with the binary.
 //!
-//! 编译进二进制（`include_str!`），`akey init` 时写进同步仓库——这样拿到仓库的
-//! 任何 agent 都能自举，不需要外部文档。
+//! Compiled into the binary (`include_str!`) and written into the sync repo by `akey init` —
+//! so any agent that gets the repo can bootstrap itself without external docs.
 
-/// 写进金库仓库的 `AGENTS.md`。
+/// The `AGENTS.md` written into the vault repo.
 pub const VAULT_AGENTS_MD: &str = include_str!("../assets/AGENTS.vault.md");

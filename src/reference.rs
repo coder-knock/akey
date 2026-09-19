@@ -1,7 +1,7 @@
-//! `akey://` 引用：用**名字**而不是明文来指代秘密。
+//! `akey://` references: name a secret by its **name** rather than its plaintext.
 //!
-//! 语法见 `REQUIREMENTS.md` §12.3。本模块只做寻址与取值，不做暴露策略判断
-//! （策略归 `cmd` 层），因此它的输出必须由调用方小心处理。
+//! The grammar is in `REQUIREMENTS.md` §12.3. This module only addresses and fetches values;
+//! it makes no exposure-policy decision (policy belongs to the `cmd` layer), so callers must handle its output with care.
 
 use std::fmt;
 
@@ -13,24 +13,24 @@ use crate::vault::model::{DEFAULT_VAULT, Entry, Field, Vault, slug};
 
 pub const SCHEME: &str = "akey://";
 
-/// 引用元数据查询参数（`?attribute=`）。
+/// Reference metadata query parameter (`?attribute=`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Attribute {
-    /// 字段值本身。
+    /// The field value itself.
     #[default]
     Value,
-    /// 由 `otp` 字段现场算出的 TOTP（6 位，30 秒窗口）。
+    /// A TOTP computed on the fly from an `otp` field (6 digits, 30-second window).
     Otp,
-    /// 条目标题。
+    /// The entry title.
     Title,
-    /// 字段类型。
+    /// The field type.
     Type,
-    /// 条目 ID。
+    /// The entry ID.
     Id,
 }
 
 impl Attribute {
-    /// query 里 `attribute=` 的规范取值。
+    /// Canonical values of `attribute=` in a query.
     pub fn as_str(self) -> &'static str {
         match self {
             Attribute::Value => "value",
@@ -41,7 +41,7 @@ impl Attribute {
         }
     }
 
-    /// 解析 `attribute=` 的取值；大小写不敏感，未知取值 → `usage`。
+    /// Parse an `attribute=` value; case-insensitive, with an unknown value → `usage`.
     fn parse_value(value: &str) -> Result<Self> {
         match value.to_ascii_lowercase().as_str() {
             "value" => Ok(Attribute::Value),
@@ -66,18 +66,18 @@ pub struct Reference {
 }
 
 impl Reference {
-    /// 解析，不做变量展开。
+    /// Parse without variable expansion.
     pub fn parse(input: &str) -> Result<Reference> {
         Reference::parse_plain(input)
     }
 
-    /// 解析，并先用 `env` 展开 `$VAR`。未定义的变量 → `usage`。
+    /// Parse after expanding `$VAR` through `env`. An undefined variable → `usage`.
     pub fn parse_in(input: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<Reference> {
         let expanded = expand_vars(input, env)?;
         Reference::parse_plain(&expanded)
     }
 
-    /// 展开后的纯解析：段数、字符集、query 语法。
+    /// Plain parse of the expanded input: segment count, character set, query grammar.
     fn parse_plain(input: &str) -> Result<Reference> {
         let body = match input.get(..SCHEME.len()) {
             Some(prefix) if prefix.eq_ignore_ascii_case(SCHEME) => &input[SCHEME.len()..],
@@ -126,7 +126,7 @@ impl Reference {
 }
 
 impl fmt::Display for Reference {
-    /// 规范形式：`akey://vault/item[/section]/field[?attribute=…]`，`attribute=value` 省略。
+    /// Canonical form: `akey://vault/item[/section]/field[?attribute=…]`, with `attribute=value` omitted.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}/{}", SCHEME, self.vault, self.item)?;
         if let Some(section) = &self.section {
@@ -140,12 +140,12 @@ impl fmt::Display for Reference {
     }
 }
 
-/// 段（vault/item/section/field）允许的字符：字母数字与 `-` `_` `.`。
+/// Characters a segment (vault/item/section/field) may hold: alphanumerics plus `-` `_` `.`.
 fn is_segment_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')
 }
 
-/// 段必须非空且只含合法字符。
+/// A segment must be non-empty and hold only legal characters.
 fn validate_segment(segment: &str, input: &str) -> Result<()> {
     if segment.is_empty() {
         return Err(Error::usage(format!("empty segment in '{input}'")));
@@ -158,7 +158,7 @@ fn validate_segment(segment: &str, input: &str) -> Result<()> {
     Ok(())
 }
 
-/// 解析 `?attribute=a&attribute=b`。参数名未知、取值未知、缺 `=` → `usage`。
+/// Parse `?attribute=a&attribute=b`. An unknown parameter name, an unknown value, or a missing `=` → `usage`.
 fn parse_query(query: &str, input: &str) -> Result<Attribute> {
     if query.is_empty() {
         return Err(Error::usage(format!("empty query in '{input}'")));
@@ -180,7 +180,7 @@ fn parse_query(query: &str, input: &str) -> Result<Attribute> {
     Ok(attribute)
 }
 
-/// `$` 之后变量名（`[A-Za-z_][A-Za-z0-9_]*`）的字节长度；0 表示不是变量。
+/// Byte length of the variable name (`[A-Za-z_][A-Za-z0-9_]*`) after `$`; 0 means it is not a variable.
 fn var_name_len(tail: &str) -> usize {
     let mut len = 0;
     for (i, c) in tail.char_indices() {
@@ -197,8 +197,8 @@ fn var_name_len(tail: &str) -> usize {
     len
 }
 
-/// 展开 `$VAR`。未定义 → `usage` 且点名该变量；`$` 后不是变量名则原样保留
-/// （随后会被段字符校验拒绝）。
+/// Expand `$VAR`. Undefined → `usage` naming that variable; when no variable name follows
+/// the `$`, it is kept verbatim (and the segment-character check rejects it afterwards).
 fn expand_vars(input: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<String> {
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
@@ -222,7 +222,7 @@ fn expand_vars(input: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<Stri
     Ok(out)
 }
 
-/// 在条目内定位字段。名字大小写不敏感；跨 section 重名 → `ambiguous`。
+/// Locate a field inside an entry. Names are case-insensitive; one name across sections → `ambiguous`.
 pub fn find_field<'a>(entry: &'a Entry, reference: &Reference) -> Result<&'a Field> {
     let section = reference.section.as_deref();
     let hit = |field: &Field| {
@@ -254,7 +254,7 @@ pub fn find_field<'a>(entry: &'a Entry, reference: &Reference) -> Result<&'a Fie
     }
 }
 
-/// 求值。`attribute != Value` 时返回的是元数据（非秘密）。
+/// Resolve. When `attribute != Value` the result is metadata (not a secret).
 pub fn resolve(
     vault: &Vault,
     reference: &Reference,
@@ -282,13 +282,13 @@ pub fn resolve(
     }
 }
 
-/// 用字段值里的 `otpauth://` URI 现算 TOTP。
+/// Compute a TOTP on the fly from the `otpauth://` URI in a field value.
 ///
-/// 用 `Totp::generate(secs)` 而不是 `generate_current()`：`totp-rs` 6.0.0 的
-/// `generate_current` 需要 `std` feature（本仓库按 `default-features = false` 引入），
-/// 且显式时间让测试可以确定性断言。
+/// We call `Totp::generate(secs)` rather than `generate_current()`: in `totp-rs` 6.0.0
+/// `generate_current` needs the `std` feature (this crate pulls it in with `default-features = false`),
+/// and an explicit time lets tests assert deterministically.
 fn totp_at(value: &str, label: &str, now: DateTime<Utc>) -> Result<String> {
-    // 出错时不回显字段值：它就是秘密（URI 里带 base32 secret）。
+    // Do not echo the field value on error: it is the secret (the URI carries the base32 secret).
     let totp = totp_rs::Totp::from_url(value)
         .map_err(|_| Error::usage(format!("field '{label}' is not a valid otpauth:// URI")))?;
     let seconds = u64::try_from(now.timestamp()).map_err(|_| {
@@ -297,9 +297,9 @@ fn totp_at(value: &str, label: &str, now: DateTime<Utc>) -> Result<String> {
     Ok(totp.generate(seconds).to_string())
 }
 
-/// 从任意文本（env 文件、配置模板）里扫出全部引用原文，供 `run` / `inject` 使用。
+/// Scan arbitrary text (an env file, a config template) for every reference written out in full, for `run` / `inject` to use.
 ///
-/// 扫描在空白或集合外字符处停止——带空格的引用需由调用方加引号。
+/// The scan stops at whitespace or a character outside the set — a reference containing a space has to be quoted by the caller.
 pub fn extract_references(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cursor = 0;
@@ -318,7 +318,7 @@ pub fn extract_references(text: &str) -> Vec<String> {
             len = i + c.len_utf8();
         }
 
-        // 光秃秃的 `akey://`（后面没有任何引用字符，如文档里写法）不算引用。
+        // A bare `akey://` (no reference characters after it, the way the docs write it) is not a reference.
         if len == 0 {
             cursor = after;
             continue;
@@ -349,7 +349,7 @@ mod tests {
         f
     }
 
-    /// RFC 6238 附录 B 的测试密钥（ASCII "12345678901234567890" 的 base32）。
+    /// The test secret from RFC 6238 Appendix B (base32 of the ASCII "12345678901234567890").
     const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
     fn otp_uri(digits: u8) -> String {
@@ -438,7 +438,7 @@ mod tests {
                 },
             ),
             (
-                // 段保留原文大小写，匹配时才不区分
+                // Segments keep their original case; only matching is case-insensitive
                 "AKEY://OpenAI/Credential",
                 Reference {
                     vault: "default".into(),
@@ -543,7 +543,7 @@ mod tests {
         assert_eq!(got.item, "OpenAI");
         assert_eq!(got.field, "credential");
 
-        // 展开发生在解析之前，因此展开结果可以出现在任意段。
+        // Expansion happens before parsing, so an expanded value may appear in any segment.
         let got = Reference::parse_in("akey://$ITEM/credential?attribute=otp", &env)
             .expect("expands");
         assert_eq!(got.item, "OpenAI");
@@ -560,7 +560,7 @@ mod tests {
         );
         assert_eq!(e.exit_code(), 2);
 
-        // `$` 后面不是变量名：保留 `$`，随后被判为非法字符。
+        // What follows `$` is not a variable name: the `$` is kept and then judged an illegal character.
         let e = Reference::parse_in("akey://db/pw$", &|_| None).err().expect("$ stays");
         assert!(matches!(&e, Error::Usage(_)), "got {e:?}");
     }
@@ -579,12 +579,12 @@ mod tests {
             assert_eq!(got, input, "round trip of '{input}'");
         }
 
-        // 省略 vault 的写法被补全为规范形式。
+        // The vault-less spelling is completed into the canonical form.
         assert_eq!(
             Reference::parse("akey://db/password").expect("parses").to_string(),
             "akey://default/db/password"
         );
-        // `attribute=value` 是默认值，规范形式里省略。
+        // `attribute=value` is the default and is omitted from the canonical form.
         assert_eq!(
             Reference::parse("akey://default/db/password?attribute=value")
                 .expect("parses")
@@ -598,14 +598,14 @@ mod tests {
         let f = fixture();
         let acme = &f.vault.entries[&f.acme];
 
-        // 跨 section 同名 → ambiguous。
+        // The same name across sections → ambiguous.
         let reference = Reference::parse("akey://acme/password").expect("parses");
         let e = find_field(acme, &reference).err().expect("ambiguous");
         assert!(matches!(&e, Error::Ambiguous(_)), "got {e:?}");
         assert_eq!(e.code(), "ambiguous");
         assert_eq!(e.exit_code(), 3);
 
-        // 指定 section 后唯一；section 名大小写不敏感。
+        // Unique once a section is named; section names are case-insensitive.
         for (input, want) in [
             ("akey://default/acme/Prod/password", "prod-pw"),
             ("akey://default/acme/dev/PASSWORD", "dev-pw"),
@@ -614,7 +614,7 @@ mod tests {
             assert_eq!(find_field(acme, &reference).expect(input).value(), want);
         }
 
-        // section 不存在、字段不存在 → not_found。
+        // No such section, no such field → not_found.
         for input in [
             "akey://default/acme/staging/password",
             "akey://acme/credential",
@@ -641,13 +641,13 @@ mod tests {
             assert_eq!(find_field(openai, &reference).expect(input).id, "credential");
         }
 
-        // `private-key` 是 "Private Key" 的 slug：带空格的 label 只能这样引用。
+        // `private-key` is the slug of "Private Key": a label with spaces can only be referenced this way.
         for input in ["akey://openai/private-key", "akey://openai/PRIVATE-KEY"] {
             let reference = Reference::parse(input).expect(input);
             assert_eq!(find_field(openai, &reference).expect(input).label, "Private Key");
         }
 
-        // label 大小写不敏感。
+        // Label matching is case-insensitive.
         let reference = Reference::parse("akey://openai/ORG").expect("parses");
         assert_eq!(find_field(openai, &reference).expect("hits").value(), "org-acme");
     }
@@ -667,7 +667,7 @@ mod tests {
         assert_eq!(resolve_str("akey://default/acme/prod/password"), "prod-pw");
 
         assert_eq!(resolve_str("akey://openai/credential?attribute=title"), "OpenAI");
-        // 没有 title 时回落到条目名。
+        // With no title it falls back to the entry name.
         assert_eq!(resolve_str("akey://acme/password?attribute=title"), "acme");
 
         assert_eq!(resolve_str("akey://openai/credential?attribute=type"), "concealed");
@@ -676,16 +676,16 @@ mod tests {
         let id = resolve_str("akey://openai/credential?attribute=id");
         assert_eq!(id, f.openai.to_string());
         assert_eq!(id.len(), 26);
-        // 元数据查询不需要字段存在。
+        // A metadata query does not require the field to exist.
         assert_eq!(resolve_str("akey://openai/nosuchfield?attribute=id"), id);
 
-        // 名字与 ID 都能命中同一条目。
+        // Both the name and the ID hit the same entry.
         assert_eq!(
             resolve_str(&format!("akey://{}/credential", f.openai)),
             "sk-live-123"
         );
 
-        // 条目不存在 → not_found（复用 Vault::find 的错误）。
+        // No such entry → not_found (reusing `Vault::find`'s error).
         let reference = Reference::parse("akey://nosuchitem/credential").expect("parses");
         let e = resolve(&f.vault, &reference, now).err().expect("not found");
         assert!(matches!(&e, Error::NotFound(_)), "got {e:?}");
@@ -697,14 +697,14 @@ mod tests {
         let f = fixture();
         let reference = Reference::parse("akey://acme/otp?attribute=otp").expect("parses");
 
-        // RFC 6238 附录 B：T = 59（SHA-1）→ 94287082。
+        // RFC 6238 Appendix B: T = 59 (SHA-1) → 94287082.
         assert_eq!(
             resolve(&f.vault, &reference, ts(59))
                 .expect("generates")
                 .to_string(),
             "94287082"
         );
-        // 同一时间窗（T = 60 落在 step 1）→ 仍与 T = 59 无关的另一个稳定值。
+        // Same time window (T = 60 falls in step 1) → another stable value, independent of T = 59.
         assert_eq!(
             resolve(&f.vault, &reference, ts(1111111109))
                 .expect("generates")
@@ -712,7 +712,7 @@ mod tests {
             "07081804"
         );
 
-        // 6 位变体：RFC 6238 同密钥同时间截断到 6 位 → 287082。
+        // The 6-digit variant: the same secret and time as RFC 6238, truncated to 6 digits → 287082.
         let six = Reference::parse("akey://acme/otp6?attribute=otp").expect("parses");
         let code = resolve(&f.vault, &six, ts(59)).expect("generates").to_string();
         assert_eq!(code, "287082");
@@ -745,13 +745,13 @@ mod tests {
             ]
         );
 
-        // 行尾无分隔符（无尾随换行）也能吃满。
+        // A line end with no separator (no trailing newline) still consumes the whole reference.
         assert_eq!(
             extract_references("TOKEN=akey://openai/credential"),
             vec!["akey://openai/credential".to_string()]
         );
 
-        // 没有引用（含只有 scheme 的文档写法）→ 空。
+        // No reference (including the scheme-only spelling from the docs) → empty.
         assert_eq!(extract_references(""), Vec::<String>::new());
         assert_eq!(extract_references("nothing to see here"), Vec::<String>::new());
         assert_eq!(
@@ -766,7 +766,7 @@ mod tests {
         let input = format!("akey://{}/credential", f.openai);
         let reference = Reference::parse(&input).expect("parses");
         assert_eq!(reference.item, f.openai.to_string());
-        // Display 输出规范形式：省略的 vault 被补成 `default`。
+        // Display prints the canonical form: the omitted vault is filled in as `default`.
         assert_eq!(
             reference.to_string(),
             format!("akey://default/{}/credential", f.openai)

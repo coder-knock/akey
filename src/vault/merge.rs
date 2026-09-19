@@ -1,7 +1,7 @@
-//! 三方合并。纯函数、无 IO、确定性——同输入必得同输出。
+//! Three-way merge. Pure, no I/O, deterministic — the same input always yields the same output.
 //!
-//! 规则表见 `REQUIREMENTS.md` §11.1；两条工程约束见 `DESIGN.md` §9：
-//! 冲突副本 ID 必须可复现（否则每次同步都会再产出一个副本），且删除不比修改强。
+//! The rule table is in `REQUIREMENTS.md` §11.1; the two engineering constraints are in `DESIGN.md` §9:
+//! conflict-copy IDs must be reproducible (otherwise every sync mints yet another copy), and a delete must not outrank an edit.
 
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,25 +12,25 @@ use ulid::Ulid;
 
 use crate::vault::model::{Entry, MAX_NAME_LEN, TokenMeta, Vault};
 
-/// 冲突副本额外携带的标签。
+/// The extra tag every conflict copy carries.
 pub const CONFLICT_TAG: &str = "conflict";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictKind {
-    /// 双方各自修改了同一条目。
+    /// Both sides edited the same entry.
     ValueDiverged,
-    /// 一边软删、一边修改。
+    /// One side soft-deleted while the other edited.
     DeleteVsEdit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Conflict {
-    /// 冲突所在的原条目 ID。
+    /// ID of the original entry the conflict sits on.
     pub id: Ulid,
     pub name: String,
     pub kind: ConflictKind,
-    /// 对端版本被保留为独立条目时的 ID。
+    /// ID under which the remote version is kept as a standalone entry.
     pub conflict_id: Ulid,
 }
 
@@ -49,15 +49,15 @@ pub struct MergeResult {
     pub stats: MergeStats,
 }
 
-/// 冲突副本的 ID：由 (原 ID, 对端 updated_at, 对端内容哈希) 派生。
+/// ID of a conflict copy: derived from (original ID, remote `updated_at`, remote content hash).
 ///
-/// 两台设备独立合并同一分歧时必须算出同一个 ID，否则每轮同步都会再生一个副本。
+/// Two devices merging the same divergence independently must compute the same ID, or every sync round mints another copy.
 pub fn conflict_copy_id(id: Ulid, updated_at: DateTime<Utc>, value_hash: [u8; 32]) -> Ulid {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(id.to_bytes());
-    // 时间戳按 RFC3339 纳秒精度入哈希：`vault.age` 解密后两台设备看到的是同一段 JSON，
-    // 只要序列化可无损往返（chrono 的 serde 编解码即是如此），摘要就逐位一致。
+    // The timestamp enters the hash at RFC3339 nanosecond precision: once `vault.age` is decrypted
+    // both devices see the same JSON, so a lossless round trip (chrono's serde codec) keeps the digest bit-identical.
     hasher.update(updated_at.to_rfc3339_opts(SecondsFormat::Nanos, true).as_bytes());
     hasher.update(value_hash);
     let digest = hasher.finalize();
@@ -66,11 +66,12 @@ pub fn conflict_copy_id(id: Ulid, updated_at: DateTime<Utc>, value_hash: [u8; 32
     Ulid::from_bytes(bytes)
 }
 
-/// 冲突副本的条目名：`<name>.conflict.<短ID>`。
+/// Entry name of a conflict copy: `<name>.conflict.<short ID>`.
 ///
-/// 条目名上限是 `MAX_NAME_LEN`，而原名本身可以长到该上限，直接拼接会越界——
-/// 原名过长时按字符边界截断再拼（合法名是纯 ASCII，截断不会切坏 UTF-8），
-/// 保证 `is_valid_name(conflict_copy_name(name, id))` 对任何合法 `name` 都成立。
+/// Entry names are capped at `MAX_NAME_LEN`, and the original name can already sit at that cap,
+/// so naive concatenation overflows it — an over-long name is truncated on a character boundary
+/// before the suffix is appended (valid names are pure ASCII, so the cut never breaks UTF-8),
+/// keeping `is_valid_name(conflict_copy_name(name, id))` true for every valid `name`.
 pub fn conflict_copy_name(name: &str, conflict_id: Ulid) -> String {
     let tag = conflict_id.to_string();
     let suffix = format!(".conflict.{}", tag[tag.len() - 8..].to_lowercase());
@@ -87,16 +88,16 @@ pub fn conflict_copy_name(name: &str, conflict_id: Ulid) -> String {
     format!("{head}{suffix}")
 }
 
-/// 单条目的合并结论。
+/// The merge verdict for a single entry.
 ///
-/// 变体体积差异大是刻意的：它是**转瞬即逝**的中间值，装箱反而多一次堆分配。
+/// The wide spread in variant sizes is deliberate: this is a **short-lived** intermediate value, so boxing it would only buy an extra heap allocation.
 #[allow(clippy::large_enum_variant)]
 enum Resolution {
-    /// 结果里不含这个条目（删除生效，或已被墓碑抑制）。
+    /// The result carries no such entry (the deletion won, or a tombstone suppressed it).
     Drop,
-    /// 原 ID 保留这个版本。
+    /// The original ID keeps this version.
     Keep(Entry),
-    /// 双方分歧：ours 占用原 ID，theirs 另存为冲突副本。
+    /// The sides diverged: ours holds the original ID, theirs is stored as a conflict copy.
     KeepWithCopy {
         winner: Entry,
         copy: Entry,
@@ -104,13 +105,13 @@ enum Resolution {
     },
 }
 
-/// 三方合并。纯函数：不读盘、不取系统时间、不产生随机数。
+/// Three-way merge. Pure: it reads no disk, takes no system time, and produces no randomness.
 pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
     let purged = merge_purged(&ours.purged, &theirs.purged);
 
     let mut vault = Vault {
-        // 容器元数据以本机工作区为准（两台设备上的 vault 名与格式版本本就相同，
-        // 取谁都一样，固定取 ours 是为了"同输入必得同输出"）。
+        // Container metadata follows the local workspace (the vault name and format version are
+        // the same on both devices, so either side would do; pinning `ours` is what makes "same input, same output" hold).
         version: ours.version,
         vault: ours.vault.clone(),
         entries: BTreeMap::new(),
@@ -118,7 +119,7 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
         purged,
     };
 
-    // 三方的 ID 取并集；`BTreeSet` 迭代天然有序，保证输出与遍历顺序无关。
+    // The three sides' IDs are unioned; `BTreeSet` iterates in an ordered way, so the output never depends on traversal order.
     let mut ids: BTreeSet<Ulid> = BTreeSet::new();
     ids.extend(base.entries.keys().copied());
     ids.extend(ours.entries.keys().copied());
@@ -126,7 +127,7 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
 
     let mut conflicts: Vec<Conflict> = Vec::new();
     for id in ids {
-        // 墓碑优先于一切：被 purge 过的 ID 不得被对端复活，也不报冲突。
+        // Tombstones outrank everything: a purged ID must not be revived by the remote side, nor reported as a conflict.
         if vault.purged.contains_key(&id) {
             continue;
         }
@@ -153,7 +154,7 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
         }
     }
 
-    // 令牌按同一套规则合并（令牌没有"内容分歧"的概念，选择见 `merge_token`）。
+    // Tokens merge under the same rules (a token has no notion of "content divergence"; see `merge_token` for the choice).
     let mut token_ids: BTreeSet<Ulid> = BTreeSet::new();
     token_ids.extend(base.tokens.keys().copied());
     token_ids.extend(ours.tokens.keys().copied());
@@ -163,13 +164,13 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
             (Some(o), Some(t)) => merge_token(base.tokens.get(&id), o, t),
             (Some(o), None) => o.clone(),
             (None, Some(t)) => t.clone(),
-            // 只存在于 base：双方都把它去掉了（吊销后清理），不复活。
+            // Only in base: both sides dropped it (cleanup after revocation); do not revive it.
             (None, None) => continue,
         };
         vault.tokens.insert(id, merged);
     }
 
-    // 遍历已有序，这里只是把"按条目 ID 排序"写成显式契约。
+    // Iteration is ordered already; this only writes "sorted by entry ID" down as an explicit contract.
     conflicts.sort_by_key(|c| c.id);
 
     let stats = stats_against(ours, &vault.entries, conflicts.len());
@@ -180,26 +181,26 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
     }
 }
 
-/// 按条目 ID 对齐的合并规则（`REQUIREMENTS.md` §11.1 的逐条实现）。
+/// Merge rules aligned by entry ID (a clause-by-clause implementation of `REQUIREMENTS.md` §11.1).
 fn resolve_entry(
     base: Option<&Entry>,
     ours: Option<&Entry>,
     theirs: Option<&Entry>,
 ) -> Resolution {
     match (base, ours, theirs) {
-        // 两边都没有：只可能来自 base——双方都去掉了它（`rm --purge` 后墓碑已过 90 天）。
+        // On neither side: it can only come from base — both sides dropped it (its tombstone aged past 90 days after `rm --purge`).
         (_, None, None) => Resolution::Drop,
 
-        // 只有本机有。
+        // Only the local side has it.
         (b, Some(o), None) => match b {
-            // 本机没动过 → 对端的删除生效（墓碑过期后同样只剩"对端没有"这一种证据）。
+            // The local side never touched it → the remote deletion wins (once a tombstone expires, "the remote lacks it" is the only evidence left).
             Some(b) if o == b => Resolution::Drop,
-            // 本机改过 → 保留本机改动，绝不静默丢数据。对端那一侧没有任何版本可言，
-            // 无从保留，因此不计冲突。
+            // The local side edited it → keep the local edit; never drop data silently. The remote
+            // side offers no version at all, so nothing can be preserved and no conflict is counted.
             _ => Resolution::Keep(o.clone()),
         },
 
-        // 只有对端有——上面那条的镜像。
+        // Only the remote side has it — the mirror image of the clause above.
         (b, None, Some(t)) => match b {
             Some(b) if t == b => Resolution::Drop,
             _ => Resolution::Keep(t.clone()),
@@ -207,22 +208,23 @@ fn resolve_entry(
 
         (b, Some(o), Some(t)) => {
             if o == t {
-                // 两边一致（含"各自新增了同一条"）：取一方即可。
+                // The sides agree (including "each added the same entry"): either copy will do.
                 return Resolution::Keep(o.clone());
             }
             if let Some(base) = b {
                 if o == base {
-                    // 只有对端改过 → 取 theirs。
+                    // Only the remote side edited it → take theirs.
                     return Resolution::Keep(with_newer_updated_at(t, o, t));
                 }
                 if t == base {
-                    // 只有本机改过 → 取 ours。
+                    // Only the local side edited it → take ours.
                     return Resolution::Keep(with_newer_updated_at(o, o, t));
                 }
             }
-            // 双方都改过且不同（含双方各自新增了同 ID 的不同内容）→ 冲突：
-            // ours 占原 ID，theirs 落为可复现 ID 的独立副本；一边软删一边改时，
-            // 改动版本照样被保留下来（"删除不比修改强"）。
+            // Both sides edited it, differently (including each adding different content under
+            // the same ID) → conflict: ours holds the original ID, theirs lands as a standalone copy
+            // with a reproducible ID; when one side soft-deleted while the other edited, the
+            // edited version is still kept ("a delete does not outrank an edit").
             let copy = conflict_copy(t);
             let kind = if o.is_deleted() == t.is_deleted() {
                 ConflictKind::ValueDiverged
@@ -238,16 +240,16 @@ fn resolve_entry(
     }
 }
 
-/// 合并结果里的 `updated_at` 取双方较新者（相等取 ours）。
+/// The merged `updated_at` is the newer of the two sides (ours on a tie).
 ///
-/// `max` 可交换，因此两台设备对同一分歧算出的时间戳一致。
+/// `max` is commutative, so two devices compute the same timestamp for the same divergence.
 fn with_newer_updated_at(winner: &Entry, ours: &Entry, theirs: &Entry) -> Entry {
     let mut entry = winner.clone();
     entry.updated_at = max(ours.updated_at, theirs.updated_at);
     entry
 }
 
-/// 把对端版本复制成独立条目：ID 与名字都由对端版本的内容派生。
+/// Copy the remote version into a standalone entry: both its ID and its name derive from that version's content.
 fn conflict_copy(source: &Entry) -> Entry {
     let id = conflict_copy_id(source.id, source.updated_at, source.value_hash());
     let mut copy = source.clone();
@@ -259,7 +261,7 @@ fn conflict_copy(source: &Entry) -> Entry {
     copy
 }
 
-/// 墓碑取并集；同一 ID 取**较早**的删除时间（先删的那一刻才是事实）。
+/// Tombstones are unioned; for the same ID take the **earlier** deletion time (the first deletion is the fact).
 fn merge_purged(
     ours: &BTreeMap<Ulid, DateTime<Utc>>,
     theirs: &BTreeMap<Ulid, DateTime<Utc>>,
@@ -274,15 +276,15 @@ fn merge_purged(
     merged
 }
 
-/// 令牌元数据按 ID 合并。
+/// Token metadata is merged by ID.
 ///
-/// 选择说明：`last_used_at` 只是"有没有被用过"，不足以判定内容分歧的胜负，因此
-/// 双方都改过且不同时取 `last_used_at` 较新的一方（相等取 ours）——两台设备独立
-/// 合并同一分歧时会算出同一份结果。
+/// Why this choice: `last_used_at` only says "it has been used", too weak to settle a content
+/// divergence, so when both sides changed it differently we take the side with the newer
+/// `last_used_at` (ours on a tie) — two devices merging the same divergence independently reach the same result.
 ///
-/// 但**撤销不可逆**：任一侧已 `revoked_at`，结果就是已撤销的，撤销时间取较早者。
-/// 否则一台设备刚吊销的令牌，会被另一台设备上更早写下的 `last_used_at` 复活
-/// ——这是安全回归，与条目层"墓碑不得被复活"同源。
+/// But **revocation is irreversible**: if either side has a `revoked_at`, the result is revoked, with the earlier revocation time.
+/// Otherwise a token one device just revoked would be revived by an earlier `last_used_at` written
+/// on another device — a security regression, born of the same rule as "a tombstone must not be revived" at the entry layer.
 fn merge_token(base: Option<&TokenMeta>, ours: &TokenMeta, theirs: &TokenMeta) -> TokenMeta {
     let mut winner = if ours == theirs {
         ours.clone()
@@ -306,7 +308,7 @@ fn merge_token(base: Option<&TokenMeta>, ours: &TokenMeta, theirs: &TokenMeta) -
     winner
 }
 
-/// 统计相对本机工作区真实发生的动作：新增 / 更新 / 移除 / 冲突。
+/// Count the actions that really happened relative to the local workspace: added / updated / removed / conflicted.
 fn stats_against(
     ours: &Vault,
     merged: &BTreeMap<Ulid, Entry>,
@@ -390,7 +392,7 @@ mod tests {
             .expect("fixture always carries a credential field")
     }
 
-    /// 双方各自改了同一条目——多数冲突用例的底座。
+    /// Both sides edited the same entry — the base for most conflict cases.
     fn diverged() -> (Vault, Vault, Vault) {
         let original = entry(id(1), "openai", "v0", 1_000);
         (
@@ -400,7 +402,7 @@ mod tests {
         )
     }
 
-    // ---- 规则表逐条 ----
+    // ---- The rule table, clause by clause ----
 
     #[test]
     fn rule_new_on_ours_only_keeps_ours() {
@@ -492,7 +494,7 @@ mod tests {
         assert_eq!(r.vault.entries[&id(1)], ours_edit);
         assert_eq!(
             r.stats.updated, 0,
-            "取的就是本机版本，本机没有需要改的东西"
+            "the local version is the one taken, so the local side has nothing to update"
         );
     }
 
@@ -519,22 +521,22 @@ mod tests {
         assert_eq!(r.conflicts.len(), 1);
         let conflict = &r.conflicts[0];
         assert_eq!(conflict.id, id(1));
-        assert_eq!(conflict.name, "openai", "冲突锚在原条目的名字上");
+        assert_eq!(conflict.name, "openai", "the conflict is anchored on the original entry's name");
         assert_eq!(conflict.kind, ConflictKind::ValueDiverged);
 
-        // ours 留在原 ID，且 updated_at 取较新者
+        // ours stays under the original ID, with the newer updated_at
         let kept = &r.vault.entries[&id(1)];
         assert_eq!(value_of(kept), "ours");
         assert_eq!(kept.updated_at, ts(3_000));
 
-        // theirs 落为独立副本，内容一字不改
+        // theirs lands as a standalone copy, its content untouched
         let copy = &r.vault.entries[&conflict.conflict_id];
         assert_eq!(value_of(copy), "theirs");
         assert_eq!(copy.updated_at, ts(3_000));
         assert!(copy.tags.iter().any(|t| t == CONFLICT_TAG));
         assert_ne!(conflict.conflict_id, id(1));
         assert_eq!(r.stats.conflicts, 1);
-        assert_eq!(r.stats.added, 1, "副本是一条真实新增的条目");
+        assert_eq!(r.stats.added, 1, "the copy is a genuinely added entry");
     }
 
     #[test]
@@ -547,7 +549,7 @@ mod tests {
             &vault(vec![original.clone()]),
         );
 
-        assert!(r.conflicts.is_empty(), "对端未改，删除直接生效");
+        assert!(r.conflicts.is_empty(), "the remote did not edit, so the deletion takes effect directly");
         assert!(r.vault.entries[&id(1)].is_deleted());
         assert_eq!(r.vault.entries[&id(1)], removal);
     }
@@ -577,7 +579,7 @@ mod tests {
             &vault(vec![theirs_entry.clone(), base.entries[&id(9)].clone()]),
         );
 
-        assert!(r.conflicts.is_empty(), "不同条目的改动必须自动合上");
+        assert!(r.conflicts.is_empty(), "edits to different entries must merge automatically");
         assert_eq!(r.vault.entries.len(), 3);
         assert_eq!(r.vault.entries.get(&id(1)), Some(&ours_entry));
         assert_eq!(r.vault.entries.get(&id(2)), Some(&theirs_entry));
@@ -585,7 +587,7 @@ mod tests {
         assert_eq!(r.stats.removed, 0);
     }
 
-    // ---- 工程约束 ----
+    // ---- Engineering constraints ----
 
     #[test]
     fn determinism_same_input_same_bytes() {
@@ -593,7 +595,7 @@ mod tests {
         let expected = serde_json::to_string(&merge3(&base, &ours, &theirs)).expect("serializable");
         for round in 0..100 {
             let again = serde_json::to_string(&merge3(&base, &ours, &theirs)).expect("serializable");
-            assert_eq!(again, expected, "第 {round} 次合并与首次不逐字节相同");
+            assert_eq!(again, expected, "merge #{round} is not byte-identical to the first");
         }
     }
 
@@ -602,9 +604,9 @@ mod tests {
         let (base, ours, theirs) = diverged();
         let source = theirs.entries[&id(1)].clone();
 
-        // 设备 A 的合并结果
+        // Device A's merge result
         let a = merge3(&base, &ours, &theirs);
-        // 设备 C 独立合并：本机版本与 A 不同，但拿到的对端版本是同一份
+        // Device C merges independently: its local version differs from A's, but the remote version it holds is the same one
         let mut other_local = ours.clone();
         other_local.entries.insert(id(1), with_value(&source, "third-device", 4_000));
         let c = merge3(&base, &other_local, &theirs);
@@ -620,9 +622,9 @@ mod tests {
             c.vault.entries[&expected].name,
             a.vault.entries[&expected].name
         );
-        assert_ne!(expected, source.id, "副本 ID 撞原 ID 会直接覆盖原条目");
+        assert_ne!(expected, source.id, "a copy ID colliding with the original ID would overwrite the original entry outright");
 
-        // 两台设备只是通过 `vault.age` 的 JSON 看到对端版本的，往返必须无损
+        // The devices only ever see the remote version through `vault.age` JSON, so the round trip must be lossless
         let reread: Entry =
             serde_json::from_str(&serde_json::to_string(&source).expect("serializable"))
                 .expect("deserializable");
@@ -631,7 +633,7 @@ mod tests {
             expected
         );
 
-        // 同输入重跑（sync 的 push 重试）不得再生一个副本
+        // Re-running on the same input (a sync push retry) must not mint another copy
         let retry = merge3(&base, &ours, &theirs);
         assert_eq!(retry.vault, a.vault);
         assert_eq!(
@@ -651,7 +653,7 @@ mod tests {
         let removal = vault(vec![deleted(&original, 2_000)]);
         let edit = vault(vec![with_value(&original, "v2", 3_000)]);
 
-        // 本机删、对端改 → 原 ID 保留本机的软删状态，改动落到冲突副本里
+        // Local delete vs remote edit → the original ID keeps the local soft-delete, the edit lands in the conflict copy
         let r = merge3(&base, &removal, &edit);
         assert_eq!(r.conflicts.len(), 1);
         let conflict = &r.conflicts[0];
@@ -659,16 +661,16 @@ mod tests {
         assert_eq!(conflict.id, id(1));
         assert!(r.vault.entries[&id(1)].is_deleted());
         let copy = &r.vault.entries[&conflict.conflict_id];
-        assert_eq!(value_of(copy), "v2", "改动不得被静默丢弃");
+        assert_eq!(value_of(copy), "v2", "the edit must not be dropped silently");
         assert!(!copy.is_deleted());
 
-        // 反向：本机改、对端删 → 改动留在原 ID，删除决定记在冲突里
+        // The reverse: local edit vs remote delete → the edit stays on the original ID, the deletion decision goes in the conflict
         let r2 = merge3(&base, &edit, &removal);
         assert_eq!(r2.conflicts.len(), 1);
         assert_eq!(r2.conflicts[0].kind, ConflictKind::DeleteVsEdit);
         assert_eq!(value_of(&r2.vault.entries[&id(1)]), "v2");
         let copy2 = &r2.vault.entries[&r2.conflicts[0].conflict_id];
-        assert!(copy2.is_deleted(), "对端的软删决定同样不得被静默丢弃");
+        assert!(copy2.is_deleted(), "the remote soft-delete decision must not be dropped silently either");
     }
 
     #[test]
@@ -681,18 +683,18 @@ mod tests {
         theirs.purged.insert(id(1), ts(1_500));
 
         let r = merge3(&base, &ours, &theirs);
-        assert!(!r.vault.entries.contains_key(&id(1)), "墓碑不得被复活");
+        assert!(!r.vault.entries.contains_key(&id(1)), "a tombstone must not be revived");
         assert_eq!(r.vault.purged.get(&id(1)), Some(&ts(1_500)));
-        assert!(r.conflicts.is_empty(), "被 purge 的条目不是冲突");
+        assert!(r.conflicts.is_empty(), "a purged entry is not a conflict");
         assert_eq!(r.stats.removed, 1);
 
-        // 反向：本机 purge、对端还留着（甚至改过）
+        // The reverse: the local side purged while the remote still has it (or even edited it)
         let mut ours_purged = Vault::default();
         ours_purged.purged.insert(id(1), ts(1_500));
         let r2 = merge3(&base, &ours_purged, &ours);
         assert!(!r2.vault.entries.contains_key(&id(1)));
 
-        // 墓碑取并集，同一 ID 取较早时间
+        // Tombstones are unioned, and the same ID takes the earlier time
         let mut a = Vault::default();
         a.purged.insert(id(1), ts(5_000));
         let mut b = Vault::default();
@@ -731,13 +733,13 @@ mod tests {
 
             assert!(
                 is_valid_name(&copy.name),
-                "冲突副本名非法：{}",
+                "illegal conflict-copy name: {}",
                 copy.name
             );
             assert_ne!(copy.name, name);
             assert!(
                 copy.name.starts_with(&format!("{name}.conflict.")),
-                "副本名应挂在原名下：{}",
+                "the copy name should hang off the original name: {}",
                 copy.name
             );
             assert!(copy.tags.iter().any(|t| t == CONFLICT_TAG));
@@ -752,11 +754,11 @@ mod tests {
             let copy = conflict_copy_name(&name, id(7));
             assert!(
                 is_valid_name(&copy),
-                "{len} 字符的原名生成了非法副本名：{copy}"
+                "an original name of {len} chars produced an illegal copy name: {copy}"
             );
             assert_ne!(copy, name);
         }
-        // 副本名不得重复打标签（对端版本本来就带 `conflict`）
+        // The copy name must not be tagged twice (the remote version already carries `conflict`)
         let original = entry(id(1), "openai", "v0", 1_000);
         let mut theirs_entry = with_value(&original, "theirs", 3_000);
         theirs_entry.tags.push(CONFLICT_TAG.to_string());
@@ -769,7 +771,7 @@ mod tests {
         assert_eq!(copy.tags.iter().filter(|t| *t == CONFLICT_TAG).count(), 1);
     }
 
-    // ---- 令牌 ----
+    // ---- Tokens ----
 
     fn token(source: &Entry) -> TokenMeta {
         TokenMeta {
@@ -798,7 +800,7 @@ mod tests {
         let seed = entry(id(5), "ci", "v0", 1_000);
         let base_token = token(&seed);
 
-        // 一方吊销、另一方刚用过 → 吊销必须赢，否则被吊销的令牌会被复活
+        // One side revoked while the other just used it → revocation must win, or the revoked token would come back
         let mut revoked = base_token.clone();
         revoked.revoked_at = Some(ts(3_000));
         let mut used = base_token.clone();
@@ -808,11 +810,11 @@ mod tests {
             &token_vault(vec![revoked]),
             &token_vault(vec![used]),
         );
-        let merged = r.vault.tokens.get(&id(5)).expect("令牌不得消失");
+        let merged = r.vault.tokens.get(&id(5)).expect("the token must not disappear");
         assert_eq!(merged.revoked_at, Some(ts(3_000)));
-        assert_eq!(merged.last_used_at, Some(ts(4_000)), "较新的使用时间要留下");
+        assert_eq!(merged.last_used_at, Some(ts(4_000)), "the newer use time must be kept");
 
-        // 都无法吊销 → 取 last_used_at 较新者，且两台设备算出同一份
+        // Neither revokes → take the newer last_used_at, and both devices compute the same thing
         let mut older = base_token.clone();
         older.last_used_at = Some(ts(5_000));
         let mut newer = base_token.clone();
@@ -823,7 +825,7 @@ mod tests {
         assert_eq!(a.vault, b.vault);
         assert_eq!(a.vault.tokens[&id(5)].last_used_at, Some(ts(6_000)));
 
-        // 只在一侧出现的令牌保留；只剩 base 的令牌不复活
+        // A token present on only one side is kept; a token left only in base is not revived
         let lone = token(&entry(id(6), "solo", "v1", 1_100));
         let r2 = merge3(
             &token_vault(vec![base_token]),
@@ -834,18 +836,18 @@ mod tests {
         assert_eq!(r2.vault.tokens.get(&id(6)), Some(&lone));
     }
 
-    // ---- 统计与排序 ----
+    // ---- Stats and ordering ----
 
     #[test]
     fn stats_count_real_actions() {
         let (base, ours, theirs) = rich_fixture();
         let r = merge3(&base, &ours, &theirs);
 
-        // 相对本机（ours）：对端带来 1 条新条目（id 3）+ 2 个冲突副本
+        // Relative to the local side (ours): the remote brings 1 new entry (id 3) + 2 conflict copies
         assert_eq!(r.stats.added, 3);
-        // id 1 分歧保留 ours 但 updated_at 取新、id 4 删除 vs 修改、id 6 对端软删 → 都是内容变化
+        // id 1 diverged and keeps ours with a newer updated_at, id 4 delete vs edit, id 6 remote soft-delete → all content changes
         assert_eq!(r.stats.updated, 3);
-        // id 8 对端物理删除且本机未改 → 从本机结果里消失
+        // id 8 was hard-deleted remotely and the local side never touched it → it vanishes from the local result
         assert_eq!(r.stats.removed, 1);
         assert_eq!(r.stats.conflicts, 2);
         assert_eq!(r.conflicts.len(), 2);
@@ -856,12 +858,12 @@ mod tests {
             copy.sort_unstable();
             copy
         };
-        assert_eq!(ids, sorted, "conflicts 必须按条目 ID 排序");
+        assert_eq!(ids, sorted, "conflicts must be sorted by entry ID");
         ids.dedup();
         assert_eq!(ids.len(), r.conflicts.len());
     }
 
-    /// 覆盖全部规则分支的一份输入：分歧、各自新增、删除 vs 修改、双方同改、对端软删、对端物理删。
+    /// One fixture covering every rule branch: divergence, an addition on either side, delete vs edit, both edited, remote soft-delete, remote hard-delete.
     fn rich_fixture() -> (Vault, Vault, Vault) {
         let mutable = entry(id(1), "openai", "v0", 1_000);
         let same_edit = entry(id(5), "both", "v0", 1_000);

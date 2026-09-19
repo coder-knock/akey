@@ -1,4 +1,4 @@
-//! 金库：数据模型、收件人清单、存储编排、三方合并。
+//! Vault: data model, recipient list, store orchestration, three-way merge.
 
 pub mod merge;
 pub mod model;

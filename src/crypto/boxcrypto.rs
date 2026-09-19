@@ -1,6 +1,6 @@
-//! age 封装：多收件人加解密与 passphrase 加解密。
+//! age wrapper: multi-recipient encryption/decryption and passphrase encryption/decryption.
 //!
-//! 本模块是唯一的密码学入口——上层不得直接调用 `age`。
+//! This module is the sole cryptography entry point — layers above must not call `age` directly.
 
 use std::io::{Read, Write};
 use std::iter;
@@ -10,9 +10,10 @@ use age::x25519::{Identity, Recipient};
 
 use crate::error::{Error, Result};
 
-/// 加密给多个收件人（所有未吊销设备 + 引导身份）。
+/// Encrypts to multiple recipients (all non-revoked devices + the bootstrap identity).
 ///
-/// 收件人为空 → `usage`（调用方保证至少一个；静默产出无法解开的文件是事故）。
+/// Empty recipient list → `usage` (the caller guarantees at least one; silently producing a file
+/// nobody can open is an incident).
 pub fn encrypt_to(recipients: &[Recipient], plaintext: &[u8]) -> Result<Vec<u8>> {
     if recipients.is_empty() {
         return Err(Error::usage(
@@ -26,25 +27,25 @@ pub fn encrypt_to(recipients: &[Recipient], plaintext: &[u8]) -> Result<Vec<u8>>
     seal(encryptor, plaintext)
 }
 
-/// 用本机身份解密。不是收件人 / 密文损坏 → `locked`（退出码 4）。
+/// Decrypts with this machine's identity. Not a recipient / corrupt ciphertext → `locked` (exit code 4).
 pub fn decrypt_with(identity: &Identity, ciphertext: &[u8]) -> Result<Vec<u8>> {
     open(ciphertext, iter::once(identity as &dyn age::Identity))
 }
 
-/// passphrase 模式（scrypt）。仅用于 `recovery.age`。
+/// passphrase mode (scrypt). Used only for `recovery.age`.
 pub fn encrypt_with_passphrase(passphrase: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>> {
     seal(age::Encryptor::with_user_passphrase(passphrase.clone()), plaintext)
 }
 
-/// 密码错误 → `locked`（退出码 4）。
+/// Wrong passphrase → `locked` (exit code 4).
 pub fn decrypt_with_passphrase(passphrase: &SecretString, ciphertext: &[u8]) -> Result<Vec<u8>> {
     let identity = age::scrypt::Identity::new(passphrase.clone());
     open(ciphertext, iter::once(&identity as &dyn age::Identity))
 }
 
-/// 写出完整的 age v1 密文。
+/// Writes out a complete age v1 ciphertext.
 ///
-/// `StreamWriter::finish` 必须调用，否则落盘的是被截断的文件。
+/// `StreamWriter::finish` must be called, otherwise what lands on disk is a truncated file.
 fn seal(encryptor: age::Encryptor, plaintext: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut writer = encryptor
@@ -59,7 +60,7 @@ fn seal(encryptor: age::Encryptor, plaintext: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// 用一个或多个身份解开密文；任何失败——不是收件人、密文损坏、scrypt 密码错——都是 `locked`。
+/// Opens ciphertext with one or more identities; any failure — not a recipient, corrupt ciphertext, wrong scrypt passphrase — is `locked`.
 fn open<'a>(
     ciphertext: &[u8],
     identities: impl Iterator<Item = &'a dyn age::Identity>,
@@ -76,7 +77,7 @@ fn open<'a>(
     Ok(plaintext)
 }
 
-/// 解密失败的对外措辞：说清"可能是本设备被移除了"，而不只是"解不开"。
+/// The outward wording for a decryption failure: make clear it "may be that this device was removed", not just "cannot open".
 fn cannot_open(reason: &dyn std::fmt::Display) -> Error {
     Error::locked(format!(
         "cannot decrypt the vault ({reason}); if this device was removed, re-add it with \

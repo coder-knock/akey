@@ -1,6 +1,7 @@
-//! 集成测试共用夹具：一台隔离的"设备" = 一个临时 HOME + 一个临时仓库。
+//! Shared fixtures for integration tests: one isolated "device" = one temp HOME + one temp repo.
 //!
-//! 全部离线：远端用本地 `file://` 裸仓库，git 全局配置被清空，杜绝开发者本机配置干扰。
+//! Fully offline: the remote is a local `file://` bare repo, and global git config is cleared so
+//! the developer's machine settings cannot bleed in.
 
 #![allow(dead_code)]
 
@@ -16,7 +17,7 @@ pub struct Device {
 }
 
 impl Device {
-    /// 未初始化的一台"空机器"。
+    /// An uninitialized "blank machine".
     pub fn blank() -> Device {
         Device {
             home: TempDir::new().unwrap(),
@@ -24,7 +25,7 @@ impl Device {
         }
     }
 
-    /// 已 `init --no-recovery` 的一台机器。
+    /// A machine already `init --no-recovery`'d.
     pub fn initialized(name: &str) -> Device {
         let device = Device::blank();
         device.init(name, &[]);
@@ -35,18 +36,18 @@ impl Device {
         self.home.path().to_path_buf()
     }
 
-    /// 该机器的金库仓库路径（`init` 默认落在 `$HOME/repo`）。
+    /// The machine's vault repo path (`init` defaults to `$HOME/repo`).
     pub fn repo(&self) -> PathBuf {
         self.home.path().join("repo")
     }
 
-    /// 装好隔离环境的 `akey` 命令。
+    /// An `akey` command wired up with the isolated environment.
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_akey"));
         cmd.arg("--home").arg(self.home.path());
         cmd.current_dir(self.workspace.path());
         cmd.env("HOME", self.home.path());
-        // 隔离本机 git 配置：否则开发者自己的 insteadOf / 签名设置会渗进测试。
+        // Isolate machine-local git config: otherwise the developer's own insteadOf / signing setup bleeds into the test.
         cmd.env("GIT_CONFIG_GLOBAL", self.workspace.path().join("gitconfig"));
         cmd.env("GIT_CONFIG_SYSTEM", self.workspace.path().join("gitconfig"));
         cmd.env("AKEY_RECOVERY_PASSPHRASE", "");
@@ -61,12 +62,12 @@ impl Device {
         self.command().args(args).output().unwrap()
     }
 
-    /// 带 stdin 运行。
+    /// Runs with stdin.
     pub fn run_with_stdin(&self, args: &[&str], stdin: &str) -> Output {
         self.run_with_stdin_env(args, stdin, &[])
     }
 
-    /// 带 stdin 与环境变量运行。
+    /// Runs with stdin and environment variables.
     pub fn run_with_stdin_env(&self, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
         let mut cmd = self.command();
         for (key, value) in envs {
@@ -99,7 +100,7 @@ impl Device {
         );
     }
 
-    /// 写一个条目，秘密值走 stdin（避免进 argv）。
+    /// Writes an entry, with the secret value going through stdin (to keep it out of argv).
     pub fn set_secret(&self, name: &str, field: &str, value: &str) {
         let payload = format!("{field}={value}\n");
         let out = self.run_with_stdin(
@@ -113,7 +114,7 @@ impl Device {
         );
     }
 
-    /// 期望成功并解析 `--json` 信封的 `data`。
+    /// Expects success and parses the `data` from the `--json` envelope.
     pub fn json_ok(&self, args: &[&str]) -> serde_json::Value {
         let mut full = vec!["--json"];
         full.extend_from_slice(args);
@@ -132,7 +133,7 @@ impl Device {
         parsed["data"].clone()
     }
 
-    /// 期望失败，返回 (退出码, stderr 解析出的错误 code, 原始 stdout)。
+    /// Expects failure; returns (exit code, error code parsed from stderr, raw stdout).
     pub fn expect_failure(&self, args: &[&str]) -> (i32, String, String) {
         let mut full = vec!["--json"];
         full.extend_from_slice(args);
@@ -160,7 +161,7 @@ impl Device {
         String::from_utf8_lossy(&self.run(args).stderr).to_string()
     }
 
-    /// 带额外环境变量运行（如提供恢复密码）。
+    /// Runs with extra environment variables (e.g. supplying the recovery passphrase).
     pub fn run_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
         let mut cmd = self.command();
         for (key, value) in envs {
@@ -169,7 +170,7 @@ impl Device {
         cmd.args(args).output().unwrap()
     }
 
-    /// 带环境变量运行并断言成功。
+    /// Runs with environment variables and asserts success.
     pub fn run_ok_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
         let out = self.run_with_env(args, envs);
         assert!(
@@ -182,7 +183,7 @@ impl Device {
         out
     }
 
-    /// 带环境变量运行并解析 `--json` 的 `data`。
+    /// Runs with environment variables and parses the `--json` `data`.
     pub fn json_ok_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> serde_json::Value {
         let mut full = vec!["--json"];
         full.extend_from_slice(args);
@@ -194,12 +195,12 @@ impl Device {
         parsed["data"].clone()
     }
 
-    /// 启用恢复密码（换机引导的前提）。
+    /// Enables the recovery passphrase (a prerequisite for bootstrapping another machine).
     pub fn enable_recovery(&self, passphrase: &str) {
         self.run_ok_with_env(&["recovery", "set"], &[("AKEY_RECOVERY_PASSPHRASE", passphrase)]);
     }
 
-    /// 从远端引导一台新设备。
+    /// Bootstraps a new device from the remote.
     pub fn join(&self, url: &str, name: &str, passphrase: &str) {
         self.run_ok_with_env(
             &["init", "--from", url, "--device", name],
@@ -208,7 +209,7 @@ impl Device {
     }
 }
 
-/// 建一个本地裸仓库，返回 `file://` URL。全测试不触网。
+/// Creates a local bare repo and returns a `file://` URL. No test touches the network.
 pub fn bare_remote(dir: &TempDir) -> String {
     let path = dir.path().join("remote.git");
     let out = Command::new("git")

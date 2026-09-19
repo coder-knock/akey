@@ -1,7 +1,8 @@
-//! 金库数据模型。
+//! The vault data model.
 //!
-//! 这里是**密文内**的数据形状——`vault.age` 解密后就是 `Vault` 的 JSON。
-//! 合并、引用、命令三层都依赖本模块，改动波及面最大。
+//! This is the shape of the data **inside the ciphertext** — decrypting `vault.age` yields
+//! exactly this `Vault` JSON. The merge, reference, and command layers all depend on this
+//! module, so changes here have the widest blast radius.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,9 +18,10 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const DEFAULT_VAULT: &str = "default";
 pub const MAX_NAME_LEN: usize = 64;
 
-/// 条目名的合法字符集：小写字母数字开头，其余允许 `a-z0-9._-`。
+/// The legal character set for entry names: starts with a lowercase letter or digit, the
+/// rest allows `a-z0-9._-`.
 ///
-/// 冲突副本名形如 `<name>.conflict.<tag>`，落在同一字符集内。
+/// Conflict-copy names look like `<name>.conflict.<tag>`, which stays within the same set.
 pub fn is_valid_name(name: &str) -> bool {
     if name.is_empty() || name.len() > MAX_NAME_LEN {
         return false;
@@ -32,7 +34,7 @@ pub fn is_valid_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
 }
 
-/// 字段标签 → 稳定 slug（引用里的 `field` 段）。
+/// Field label → stable slug (the `field` segment of a reference).
 pub fn slug(label: &str) -> String {
     let mut out = String::with_capacity(label.len());
     for c in label.chars() {
@@ -56,7 +58,8 @@ pub struct Vault {
     pub entries: BTreeMap<Ulid, Entry>,
     #[serde(default)]
     pub tokens: BTreeMap<Ulid, TokenMeta>,
-    /// 永久删除的墓碑：防止对端同步时把已 purge 的条目复活。
+    /// Tombstones for permanently deleted entries: they keep a purged entry from being
+    /// revived when the peer syncs.
     #[serde(default)]
     pub purged: BTreeMap<Ulid, DateTime<Utc>>,
 }
@@ -74,7 +77,8 @@ impl Default for Vault {
 }
 
 impl Vault {
-    /// 按 ID 或名字查条目。ID 优先，其次精确名，最后大小写不敏感名。
+    /// Look up an entry by ID or name. ID first, then exact name, then case-insensitive
+    /// name.
     pub fn find(&self, key: &str) -> Result<&Entry> {
         if let Ok(id) = Ulid::from_string(key)
             && let Some(entry) = self.entries.get(&id)
@@ -99,7 +103,8 @@ impl Vault {
         }
     }
 
-    /// 名字是否已被占用（含已软删条目，避免恢复时撞名）。
+    /// Whether the name is already taken (including soft-deleted entries, so a restore
+    /// cannot collide on a name).
     pub fn name_taken(&self, name: &str, except: Ulid) -> bool {
         self.entries
             .values()
@@ -149,7 +154,8 @@ pub struct Entry {
     pub rotated_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_at: Option<DateTime<Utc>>,
-    /// 软删标记。合并时它是普通字段——"一边删一边改"因此不会被静默丢弃。
+    /// Soft-delete marker. During a merge it is an ordinary field — so "deleted on one side,
+    /// edited on the other" is not silently dropped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<DateTime<Utc>>,
 }
@@ -194,7 +200,8 @@ impl Entry {
             .find(|f| f.id == slug || f.id == label || f.label.eq_ignore_ascii_case(label))
     }
 
-    /// 全部字段值的顺序无关哈希。用于让冲突副本 ID 可复现（见 DESIGN §9）。
+    /// An order-independent hash of all field values. It makes conflict-copy IDs
+    /// reproducible (see DESIGN §9).
     pub fn value_hash(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -214,7 +221,7 @@ impl Entry {
         hasher.finalize().into()
     }
 
-    /// 最近使用时间：`last_used_at` 与 `updated_at` 取较新者。
+    /// Most recent activity: the later of `last_used_at` and `updated_at`.
     pub fn latest_activity(&self) -> DateTime<Utc> {
         match self.last_used_at {
             Some(used) if used > self.updated_at => used,
@@ -239,7 +246,7 @@ impl fmt::Debug for Entry {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
-    /// 稳定 slug，引用中使用的名字。
+    /// Stable slug, the name used in references.
     pub id: String,
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,12 +271,12 @@ impl Field {
         self.value.as_str()
     }
 
-    /// 交付给调用者前是否必须显式 `--reveal`。
+    /// Whether delivering this to the caller requires an explicit `--reveal`.
     pub fn is_concealed(&self) -> bool {
         self.ty.is_concealed()
     }
 
-    /// 人类可读展示值。
+    /// A human-readable display value.
     pub fn display_value(&self, reveal: bool) -> String {
         if self.is_concealed() && !reveal {
             crate::output::REDACTED.to_string()
@@ -280,7 +287,7 @@ impl Field {
 }
 
 impl fmt::Debug for Field {
-    /// 值永不出现在 Debug 中——避免任何 `{:?}` 泄漏密钥。
+    /// The value never appears in Debug — no `{:?}` can leak a secret.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Field")
             .field("id", &self.id)
@@ -305,7 +312,7 @@ pub enum Category {
 }
 
 impl Category {
-    /// 新建条目时的内置字段骨架。
+    /// The built-in field skeleton for a new entry.
     pub fn builtin_fields(self) -> &'static [(&'static str, FieldType)] {
         use FieldType::*;
         match self {
@@ -329,7 +336,7 @@ impl Category {
         }
     }
 
-    /// 默认的"秘密字段"，用于 `--stdin` 时决定取哪个值。
+    /// The default "secret field", used to decide which value `--stdin` targets.
     pub fn default_secret_field(self) -> &'static str {
         match self {
             Category::Apikey => "credential",
@@ -377,12 +384,13 @@ pub enum FieldType {
 }
 
 impl FieldType {
-    /// 交付给调用者前是否必须显式 `--reveal`。
+    /// Whether delivering this to the caller requires an explicit `--reveal`.
     ///
-    /// `Otp` 也算：那个字段存的是 TOTP **种子**（`otpauth://…?secret=…`），
-    /// 拿到种子就能永久推导出全部动态码——它比一次性的那个码敏感得多。
-    /// 曾经漏了它，于是默认 `get` 就把种子印出来，连 `AKEY_NO_REVEAL`
-    /// 与条目的 `reveal=deny` 都拦不住（因为字段压根没被当成秘密）。
+    /// `Otp` counts too: that field stores a TOTP **seed** (`otpauth://…?secret=…`), and
+    /// holding the seed lets anyone derive every future code forever — it is far more
+    /// sensitive than the single code it produces. It was once left out, so a default `get`
+    /// printed the seed, and neither `AKEY_NO_REVEAL` nor the entry's `reveal=deny` could
+    /// stop it (the field simply was not treated as a secret).
     pub fn is_concealed(self) -> bool {
         matches!(
             self,
@@ -429,14 +437,15 @@ impl Reveal {
     }
 }
 
-/// 能力令牌的公开元数据。明文只在签发那一刻回显一次。
+/// Public metadata for a capability token. The plaintext is echoed exactly once, at issue
+/// time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenMeta {
     pub id: Ulid,
     pub name: String,
-    /// `base64(sha256(token))`。明文不可恢复。
+    /// `base64(sha256(token))`. The plaintext is unrecoverable.
     pub hash: Zeroizing<String>,
-    /// `None` = 允许全部条目（仍受 `deny_reveal` 与 `expires_at` 约束）。
+    /// `None` = every entry is allowed (still bounded by `deny_reveal` and `expires_at`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -455,7 +464,7 @@ impl TokenMeta {
         self.revoked_at.is_none() && self.expires_at.is_none_or(|exp| exp > now)
     }
 
-    /// 该令牌是否有权访问此条目。
+    /// Whether this token may access that entry.
     pub fn permits(&self, entry_name: &str) -> bool {
         match &self.allow {
             None => true,
@@ -492,8 +501,8 @@ mod tests {
         assert!(FieldType::Concealed.is_concealed());
         assert!(FieldType::Notes.is_concealed());
         assert!(FieldType::SshKey.is_concealed());
-        // `otp` 字段存的是 TOTP **种子**，不是那个一次性码——拿到种子就能永久推导出
-        // 全部动态码，所以它必须默认隐藏。
+        // An `otp` field stores a TOTP **seed**, not the one-time code — holding the seed
+        // lets anyone derive every future code forever, so it must be hidden by default.
         assert!(FieldType::Otp.is_concealed());
         assert!(!FieldType::String.is_concealed());
         assert!(!FieldType::Url.is_concealed());

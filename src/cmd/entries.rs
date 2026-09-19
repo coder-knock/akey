@@ -1,11 +1,12 @@
-//! 条目类命令：增删改查、复制改名、模板、冲突收敛。
+//! Entry commands: CRUD, copy and rename, templates, conflict resolution.
 //!
-//! 每个命令函数只做**参数搬运 + 落盘编排**：所有决策逻辑都抽成接受 `&Vault` /
-//! `&mut Vault` 的纯函数，这样单元测试无需构造 `Ctx`（其字段是私有的）。
-//! 写路径统一走 `Store::update`（读-改-写 + 排他锁 + 原子落盘）；`--dry-run`
-//! 把同一套运算跑在内存副本上，不落盘也不写审计。
+//! Each command function only does **argument shuttling + persistence orchestration**: every
+//! decision is factored into a pure function taking `&Vault` / `&mut Vault`, so unit tests need
+//! not build a `Ctx` (whose fields are private). Writes all go through `Store::update`
+//! (read-modify-write + exclusive lock + atomic persist); `--dry-run` runs the same computation
+//! on an in-memory copy, persisting nothing and writing no audit entry.
 //!
-//! 输出纪律：人类文本与 JSON 数据由**同一个 `emit` 调用**发出，二者同源。
+//! Output discipline: human text and JSON data are emitted by **the same `emit` call** — one source for both.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -31,9 +32,9 @@ use crate::vault::model::{
     slug,
 };
 
-/// 冲突副本名的中缀，与 `vault::merge` 生成的名字保持一致。
+/// Infix of a conflict-copy name, matching the names `vault::merge` generates.
 const CONFLICT_MARK: &str = ".conflict.";
-/// 冲突条目标记，与 `vault::merge` 打的标签保持一致。
+/// Conflict-entry tag, matching the tag `vault::merge` applies.
 const CONFLICT_TAG: &str = "conflict";
 
 const ALL_CATEGORIES: [Category; 7] = [
@@ -46,14 +47,14 @@ const ALL_CATEGORIES: [Category; 7] = [
     Category::EnvBundle,
 ];
 
-// ─────────────────────────────── 命令入口 ───────────────────────────────
+// ─────────────────────────────── Command entry points ───────────────────────────────
 
-/// 查看条目。默认隐藏 `concealed` 字段，`--reveal` 需过三重策略闸门。
+/// Show an entry. `concealed` fields are hidden by default; `--reveal` must pass a three-fold policy gate.
 pub fn get(ctx: &Ctx, args: &GetArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
     let entry = vault.find(&args.item)?;
-    // 令牌作用域始终校验；有无令牌都走同一条路。
+    // Token scope is always checked; the path is the same with or without a token.
     ctx.authorize(&vault, &entry.name)?;
     if args.reveal {
         ctx.gate_reveal(&vault, Some(entry))?;
@@ -76,7 +77,7 @@ pub fn get(ctx: &Ctx, args: &GetArgs) -> Result<()> {
     ctx.out.emit(render_entry_human(&view), &view)
 }
 
-/// 新建或更新条目。名字不变时第二次 `set` 是**更新**（ID / `created_at` 不动）。
+/// Create or update an entry. With the name unchanged, a second `set` is an **update** (ID and `created_at` stay put).
 pub fn set(ctx: &Ctx, args: &SetArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.item.is_empty() {
@@ -128,7 +129,7 @@ pub fn set(ctx: &Ctx, args: &SetArgs) -> Result<()> {
         "dry_run": dry,
     });
     if dry {
-        // 预览里隐藏字段只出占位符——明文绝不进 JSON（NFR-9）。
+        // In the preview, concealed fields show only the placeholder — plaintext never enters JSON (NFR-9).
         let preview = serde_json::to_value(entry_view(&outcome.entry, false)).map_err(json_err)?;
         ctx.out.note(&serde_json::to_string_pretty(&preview).map_err(json_err)?);
         data["entry"] = preview;
@@ -136,7 +137,7 @@ pub fn set(ctx: &Ctx, args: &SetArgs) -> Result<()> {
     ctx.out.emit(human, &data)
 }
 
-/// 修改已有条目；不创建。缺省的标志一律"不动"。
+/// Edit an existing entry; never creates one. Any flag left out means "leave it alone".
 pub fn edit(ctx: &Ctx, args: &EditArgs) -> Result<()> {
     ctx.gate_write()?;
     let plan = EditPlan::from_args(args)?;
@@ -190,7 +191,7 @@ pub fn edit(ctx: &Ctx, args: &EditArgs) -> Result<()> {
     ctx.out.emit(human, &data)
 }
 
-/// 删除条目：默认软删，`--purge` 硬删并写墓碑。
+/// Delete an entry: soft by default; `--purge` hard-deletes and writes a tombstone.
 pub fn rm(ctx: &Ctx, args: &RmArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.items.is_empty() {
@@ -215,7 +216,7 @@ pub fn rm(ctx: &Ctx, args: &RmArgs) -> Result<()> {
     report.into_error()
 }
 
-/// 恢复软删条目。
+/// Restore a soft-deleted entry.
 pub fn restore(ctx: &Ctx, args: &RestoreArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.items.is_empty() {
@@ -239,7 +240,7 @@ pub fn restore(ctx: &Ctx, args: &RestoreArgs) -> Result<()> {
     report.into_error()
 }
 
-/// 复制条目：新 ID、新名字，源条目不动。
+/// Copy an entry: a new ID and a new name, with the source untouched.
 pub fn cp(ctx: &Ctx, args: &CpArgs) -> Result<()> {
     ctx.gate_write()?;
     let store = ctx.store()?;
@@ -281,7 +282,7 @@ pub fn cp(ctx: &Ctx, args: &CpArgs) -> Result<()> {
     ctx.out.emit(human, &data)
 }
 
-/// 重命名条目：ID 不变，引用不断。
+/// Rename an entry: the ID stays, so references keep resolving.
 pub fn mv(ctx: &Ctx, args: &MvArgs) -> Result<()> {
     ctx.gate_write()?;
     let store = ctx.store()?;
@@ -321,13 +322,14 @@ pub fn mv(ctx: &Ctx, args: &MvArgs) -> Result<()> {
     ctx.out.emit(human, &data)
 }
 
-/// 列出条目。**JSON 里绝不出现字段值**——只出元数据。
+/// List entries. **Field values never appear in JSON** — metadata only.
 pub fn list(ctx: &Ctx, args: &ListArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
     let now = Utc::now();
-    // 带令牌时只列作用域内的条目。用空名探测：名字永远非空，所以
-    // 只有"无令牌"或"令牌不限制条目"才返回 Ok；`token_scope` 说明要逐条判定。
+    // With a token, list only the entries in scope. Probe with an empty name: a name is never
+    // empty, so only "no token" or "the token does not restrict entries" returns Ok; `token_scope`
+    // means each entry has to be judged individually.
     let unrestricted = match ctx.authorize(&vault, "") {
         Ok(_) => true,
         Err(Error::TokenScope(_)) => false,
@@ -352,9 +354,9 @@ pub fn list(ctx: &Ctx, args: &ListArgs) -> Result<()> {
     ctx.out.emit(render_list_human(&rows), &data)
 }
 
-/// 分类模板：`list` 列分类，`get` 出空值模板。
+/// Category templates: `list` enumerates categories, `get` prints an empty-value template.
 ///
-/// 模板是**静态契约**，不读金库、也不写审计——因此没有仓库也能用（与 `schema` 同类）。
+/// A template is a **static contract**: it reads no vault and writes no audit — so it works with no repo at all (the same kind of command as `schema`).
 pub fn template(ctx: &Ctx, args: &TemplateArgs) -> Result<()> {
     match &args.command {
         TemplateCommand::List => {
@@ -402,7 +404,7 @@ pub fn template(ctx: &Ctx, args: &TemplateArgs) -> Result<()> {
     }
 }
 
-/// 列出合并产生的冲突副本。
+/// List the conflict copies a merge produced.
 pub fn conflicts(ctx: &Ctx, _args: &ConflictsArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
@@ -429,7 +431,7 @@ pub fn conflicts(ctx: &Ctx, _args: &ConflictsArgs) -> Result<()> {
         .emit(human, &json!({ "count": rows.len(), "conflicts": json_rows }))
 }
 
-/// 收敛一个冲突：`--ours` 丢副本，`--theirs` 用副本内容覆盖原名条目。
+/// Resolve one conflict: `--ours` drops the copy, `--theirs` overwrites the original-name entry with the copy's content.
 pub fn resolve(ctx: &Ctx, args: &ResolveArgs) -> Result<()> {
     ctx.gate_write()?;
     let side = match (args.ours, args.theirs) {
@@ -481,9 +483,9 @@ pub fn resolve(ctx: &Ctx, args: &ResolveArgs) -> Result<()> {
     ctx.out.emit(human, &data)
 }
 
-// ─────────────────────────────── 输出视图 ───────────────────────────────
+// ─────────────────────────────── Output views ───────────────────────────────
 
-/// 单个字段的对外视图。隐藏字段只出占位符（除非显式 reveal）。
+/// The outward view of a single field. Concealed fields show only the placeholder (unless explicitly revealed).
 #[derive(Debug, Serialize)]
 struct FieldView {
     id: String,
@@ -494,13 +496,13 @@ struct FieldView {
     ty: FieldType,
     concealed: bool,
     value: String,
-    /// 供 agent 引用而不是取值。
+    /// For an agent to reference rather than read.
     reference: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     otp: Option<String>,
 }
 
-/// 条目视图。`notes` 是自由文本，按隐藏内容对待。
+/// The entry view. `notes` is free text and is treated as concealed content.
 #[derive(Debug, Serialize)]
 struct EntryView {
     id: Ulid,
@@ -526,7 +528,7 @@ struct EntryView {
     fields: Vec<FieldView>,
 }
 
-/// `list` 的一行摘要。**不含任何字段值。**
+/// One summary row of `list`. **Carries no field values.**
 #[derive(Debug, Serialize)]
 struct EntrySummary {
     name: String,
@@ -617,7 +619,7 @@ fn build_view(entry: &Entry, fields: Vec<&Field>, revealed: bool) -> EntryView {
     }
 }
 
-/// `--field` 选择；未指定则全部字段。找不到 → `not_found`。
+/// `--field` selection; every field when unspecified. Not found → `not_found`.
 fn select_fields<'a>(entry: &'a Entry, wanted: &[String]) -> Result<Vec<&'a Field>> {
     if wanted.is_empty() {
         return Ok(entry.fields.iter().collect());
@@ -632,7 +634,7 @@ fn select_fields<'a>(entry: &'a Entry, wanted: &[String]) -> Result<Vec<&'a Fiel
     Ok(selected)
 }
 
-/// 给 `otp` 类型字段现算一次性口令（走 `reference::resolve`，与 `read` 同一实现）。
+/// Compute a one-time password for `otp`-typed fields (through `reference::resolve`, the same code `read` uses).
 fn fill_otp(vault: &Vault, view: &mut EntryView, now: DateTime<Utc>) -> Result<()> {
     let item = view.name.clone();
     for view_field in view.fields.iter_mut() {
@@ -729,9 +731,9 @@ fn render_list_human(rows: &[EntrySummary]) -> String {
         .join("\n")
 }
 
-// ─────────────────────────── 赋值语句与字段编辑 ───────────────────────────
+// ─────────────────────────── Assignments and field editing ───────────────────────────
 
-/// 一条赋值语句：`[<section>.]<field>[[<type>]]=value`。
+/// One assignment: `[<section>.]<field>[[<type>]]=value`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Assignment {
     section: Option<String>,
@@ -759,12 +761,12 @@ const ASSIGNABLE_TYPES: [FieldType; 10] = [
     FieldType::Notes,
 ];
 
-/// 可被反斜杠转义的字符（其余 `\x` 原样保留，避免毁掉含反斜杠的私钥/正则）。
+/// Characters a backslash may escape (any other `\x` is kept verbatim, so a private key or regex containing a backslash survives).
 fn is_escapable(c: char) -> bool {
     matches!(c, '.' | '=' | '[' | ']' | '\\')
 }
 
-/// 找**第一个未被转义**的分隔符，切成两半。
+/// Find the **first unescaped** separator and split the input in two.
 fn split_unescaped(input: &str, sep: char) -> Option<(&str, &str)> {
     let mut escaped = false;
     for (idx, c) in input.char_indices() {
@@ -806,7 +808,7 @@ fn parse_field_type(raw: &str, spec: &str) -> Result<FieldType> {
     )))
 }
 
-/// 解析 `[section.]field[type]=value`；`value == [delete]` 表示删除该字段。
+/// Parse `[section.]field[type]=value`; `value == [delete]` means delete that field.
 fn parse_assignment(spec: &str) -> Result<Assignment> {
     let (lhs, raw_value) = split_unescaped(spec, '=').ok_or_else(|| {
         Error::usage(format!(
@@ -816,8 +818,9 @@ fn parse_assignment(spec: &str) -> Result<Assignment> {
 
     let (head, ty) = match split_unescaped(lhs, '[') {
         Some((head, rest)) => {
-            // 两种写法都收：`field[type]` 与 1Password 式的 `field[[type]]`。
-            // DESIGN.md 一直写的是后者，而解析器只吃前者——文档与实现不一致本身就是缺陷。
+            // Both spellings are accepted: `field[type]` and the 1Password-style `field[[type]]`.
+            // DESIGN.md always wrote the latter while the parser only took the former — a doc and
+            // an implementation disagreeing is itself a defect.
             let inner = rest
                 .strip_suffix(']')
                 .map(|inner| inner.strip_prefix('[').unwrap_or(inner))
@@ -876,7 +879,7 @@ fn field_matches(field: &Field, assignment: &Assignment) -> bool {
     name_hit && section_hit
 }
 
-/// 应用一条赋值。字段已存在则改值（并补齐给定的 section / type），否则新建。
+/// Apply one assignment. If the field exists, change its value (filling in the given section / type); otherwise create it.
 fn apply_assignment(entry: &mut Entry, assignment: &Assignment) {
     match &assignment.action {
         AssignAction::Delete => entry.fields.retain(|f| !field_matches(f, assignment)),
@@ -905,7 +908,7 @@ fn apply_assignments(entry: &mut Entry, assignments: &[Assignment]) {
     }
 }
 
-/// argv 里出现明文、且落进隐藏字段的标签（用于告警）。空值不算。
+/// Labels whose plaintext came in through argv and landed in a concealed field (for the warning). Empty values do not count.
 fn argv_secret_labels(entry: &Entry, assignments: &[Assignment]) -> Vec<String> {
     let mut labels: Vec<String> = Vec::new();
     for assignment in assignments {
@@ -940,7 +943,7 @@ fn warn_argv_secrets_edit(ctx: &Ctx, assignments: &[Assignment], entry: &Entry) 
     ));
 }
 
-// ─────────────────────────── stdin / 密码生成 ───────────────────────────
+// ─────────────────────────── stdin / password generation ───────────────────────────
 
 fn read_stdin() -> Result<String> {
     let mut buf = String::new();
@@ -948,7 +951,7 @@ fn read_stdin() -> Result<String> {
     Ok(buf)
 }
 
-/// `--stdin` 的两种形态：含 `=` 的行按赋值语句逐行解析；否则整段就是一个秘密值。
+/// The two shapes of `--stdin`: lines containing `=` are parsed one by one as assignments; otherwise the whole input is a single secret value.
 fn apply_stdin(entry: &mut Entry, text: &str, secret_field: Option<&str>) -> Result<()> {
     let body = text.trim_end_matches(['\n', '\r']);
     if body.trim().is_empty() {
@@ -992,7 +995,7 @@ fn apply_stdin(entry: &mut Entry, text: &str, secret_field: Option<&str>) -> Res
 
 const LETTER_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DIGIT_CHARS: &str = "0123456789";
-/// 不用引号/反斜杠/空格，避免 shell 与序列化踩坑。
+/// No quotes, backslashes, or spaces, keeping shells and serialization out of trouble.
 const SYMBOL_CHARS: &str = "!@#$%^&*()-_=+[]{}:,.?/";
 
 const DEFAULT_PASSWORD_LEN: usize = 32;
@@ -1006,7 +1009,7 @@ struct Recipe {
     len: usize,
 }
 
-/// 配方形如 `letters,digits,symbols,32`：字符类缺省全部，长度缺省 32。
+/// A recipe looks like `letters,digits,symbols,32`: character classes default to all, length to 32.
 fn parse_recipe(raw: &str) -> Result<Recipe> {
     let mut letters = false;
     let mut digits = false;
@@ -1059,8 +1062,8 @@ fn recipe_pool(recipe: &Recipe) -> Vec<char> {
     pool
 }
 
-/// 从字节源取字符。`>= limit` 的字节被拒绝（去掉取模偏置）；来源异常时最后按取模兜底，
-/// 保证**长度恒等于配方长度**且不会死循环。
+/// Draw characters from a byte source. Bytes `>= limit` are rejected (removing modulo bias); if the source misbehaves, a final
+/// modulo fallback guarantees the **length always equals the recipe length** without looping forever.
 fn password_from_bytes<F: FnMut() -> u8>(recipe: &Recipe, mut next: F) -> String {
     let pool = recipe_pool(recipe);
     let size = pool.len();
@@ -1096,10 +1099,10 @@ fn generate_password(recipe: &Recipe) -> String {
     })
 }
 
-// ─────────────────────────────── 模板 ───────────────────────────────
+// ─────────────────────────────── Templates ───────────────────────────────
 
-/// `--template` 的输入形状：`Entry` 的全部**可写**字段，且都可缺省。
-/// `value` 用 `Value` 承接数字/布尔等非字符串写法。
+/// The shape of `--template` input: the whole set of **writable** `Entry` fields, every one optional.
+/// `value` uses `Value` to accept non-string spellings such as numbers and booleans.
 #[derive(Debug, Default, Deserialize)]
 struct EntryTemplate {
     #[serde(default)]
@@ -1163,8 +1166,8 @@ impl EntryTemplate {
         entry
     }
 
-    /// 把模板内容盖到条目上；ID / 名字 / `created_at` 由调用方负责保持。
-    /// `fields` 为空数组时不覆盖（避免一个空模板清空既有字段）。
+    /// Overlay the template content onto the entry; preserving ID / name / `created_at` is the caller's job.
+    /// An empty `fields` array does not overwrite (so an empty template cannot wipe existing fields).
     fn overlay(&self, entry: &mut Entry) {
         if let Some(category) = self.category {
             entry.category = category;
@@ -1197,8 +1200,8 @@ impl EntryTemplate {
 }
 
 fn read_template(path: &Path) -> Result<EntryTemplate> {
-    // 用 std::fs 而不是 paths::read_file：后者是给 akey **自己的**文件用的，
-    // 会把"文件不存在"解释成"仓库没初始化，去跑 akey init"——对用户给的模板路径是胡说。
+    // Use std::fs instead of paths::read_file: the latter is for akey's **own** files, and it reads
+    // a missing file as "the repo is not initialized, go run akey init" — nonsense for a user-supplied template path.
     let bytes = std::fs::read(path).map_err(|e| {
         Error::usage(format!("cannot read template {}: {e}", path.display()))
     })?;
@@ -1206,7 +1209,7 @@ fn read_template(path: &Path) -> Result<EntryTemplate> {
         .map_err(|e| Error::usage(format!("template {} is not valid JSON: {e}", path.display())))
 }
 
-/// `template get <category>` 的输出：空值的内置字段骨架。
+/// The output of `template get <category>`: a skeleton of the built-in fields with empty values.
 fn category_template(category: Category) -> Value {
     json!({
         "name": "",
@@ -1231,7 +1234,7 @@ fn category_template(category: Category) -> Value {
     })
 }
 
-// ─────────────────────────────── 写路径纯函数 ───────────────────────────────
+// ─────────────────────────────── Pure write-path functions ───────────────────────────────
 
 fn skeleton(id: Ulid, name: String, category: Category, now: DateTime<Utc>) -> Entry {
     let mut entry = Entry::new(id, name, category, now);
@@ -1243,7 +1246,7 @@ fn skeleton(id: Ulid, name: String, category: Category, now: DateTime<Utc>) -> E
     entry
 }
 
-/// 已软删的条目不能被写命令就地复活；先 `restore` 再改。
+/// A write command cannot revive a soft-deleted entry in place; `restore` first, then edit.
 fn writable_entry(vault: &Vault, key: &str) -> Result<Option<Entry>> {
     match vault.find(key) {
         Ok(entry) if entry.is_deleted() => Err(Error::usage(format!(
@@ -1478,7 +1481,7 @@ fn apply_edit(vault: &mut Vault, plan: &EditPlan, now: DateTime<Utc>) -> Result<
     })
 }
 
-/// 批量操作结果。失败项不阻断其他项——成功的改动照常落盘。
+/// The result of a batch operation. A failing item does not block the others — successful changes are persisted as usual.
 #[derive(Default)]
 struct BatchReport {
     results: Vec<BatchResult>,
@@ -1546,7 +1549,7 @@ impl BatchReport {
         lines.join("\n")
     }
 
-    /// 有失败项时返回错误（保留首条的类别与退出码），并在消息里点名成功项。
+    /// Returns an error when any item failed (keeping the first item's kind and exit code), naming the successful items in the message.
     fn into_error(self) -> Result<()> {
         if self.failed.is_empty() {
             return Ok(());
@@ -1586,7 +1589,7 @@ fn apply_rm(vault: &mut Vault, items: &[String], purge: bool, now: DateTime<Utc>
         };
         if purge {
             vault.entries.remove(&id);
-            // 墓碑：防止对端同步时把已彻底删除的条目复活。
+            // Tombstone: keeps a remote sync from reviving an entry that was removed outright.
             vault.purged.insert(id, now);
             report.push(item, &name, "purged");
         } else if deleted {
@@ -1710,9 +1713,9 @@ fn apply_mv(vault: &mut Vault, old: &str, new: &str, now: DateTime<Utc>) -> Resu
     Ok(outcome)
 }
 
-// ─────────────────────────────── 过滤与冲突 ───────────────────────────────
+// ─────────────────────────────── Filtering and conflicts ───────────────────────────────
 
-/// `list` 的过滤：软删、tags(AND)、category、favorite、过期窗口。结果按 name 排序（确定性）。
+/// `list` filtering: soft-deleted, tags (AND), category, favorite, expiry window. Results are sorted by name (deterministic).
 fn select_entries<'a>(
     vault: &'a Vault,
     args: &ListArgs,
@@ -1734,7 +1737,7 @@ fn select_entries<'a>(
         .filter(|entry| args.category.is_none_or(|c| entry.category == c))
         .filter(|entry| !args.favorite || entry.favorite)
         .filter(|entry| match window {
-            // 已过期的不算"将要过期"。
+            // An already-expired entry does not count as "about to expire".
             Some((start, end)) => entry.expires_at.is_some_and(|at| at >= start && at <= end),
             None => true,
         })
@@ -1802,12 +1805,12 @@ struct ResolveOutcome {
     name: String,
     id: Ulid,
     side: Side,
-    /// 内容来源（`--ours` 时是原名条目自己）。
+    /// Where the content came from (with `--ours`, the original-name entry itself).
     kept: String,
     removed: Vec<String>,
 }
 
-/// 归一化冲突目标：`<name>` 与 `<name>.conflict.<tag>` 都定位到**原名条目**。
+/// Normalize a conflict target: both `<name>` and `<name>.conflict.<tag>` locate the **original-name entry**.
 fn conflict_target(vault: &Vault, key: &str) -> Result<String> {
     let found = match vault.find(key) {
         Ok(entry) => Some(entry.name.clone()),
@@ -1854,7 +1857,7 @@ fn apply_resolve(
             "no conflict copy found for '{base}'; run `akey conflicts` first"
         )));
     }
-    // 多个副本时取最新的那条，名字做决胜，保证可复现。
+    // With several copies, take the newest one, the name as tiebreaker, so the result is reproducible.
     copies.sort_by(|a, b| a.2.cmp(&b.2).then(a.1.cmp(&b.1)));
     let (source_id, source_name, _) = copies.last().expect("checked non-empty").clone();
     let source = vault
@@ -1884,7 +1887,7 @@ fn apply_resolve(
     let mut removed = Vec::with_capacity(copies.len());
     for (id, name, _) in &copies {
         vault.entries.remove(id);
-        // 墓碑让收敛结果在对端也稳定，副本不会被重新合并进来。
+        // The tombstone makes the resolution stable on the remote too, so the copy is not merged back in.
         vault.purged.insert(*id, now);
         removed.push(name.clone());
     }
@@ -1897,7 +1900,7 @@ fn apply_resolve(
     })
 }
 
-// ─────────────────────────────── 小工具 ───────────────────────────────
+// ─────────────────────────────── Small helpers ───────────────────────────────
 
 fn json_err(err: serde_json::Error) -> Error {
     Error::Io(std::io::Error::other(err))
@@ -1980,7 +1983,7 @@ mod tests {
         }
     }
 
-    // 1. 赋值语句解析
+    // 1. Assignment parsing
     #[test]
     fn assignment_parsing_table() {
         let cases: &[(&str, Assignment)] = &[
@@ -2021,7 +2024,7 @@ mod tests {
                 },
             ),
             (
-                // 值里含 '='：只有第一个未转义的 '=' 是分隔符。
+                // The value contains '=': only the first unescaped '=' is the separator.
                 "dsn=postgres://u:p@h/db?sslmode=require",
                 Assignment {
                     section: None,
@@ -2031,7 +2034,7 @@ mod tests {
                 },
             ),
             (
-                // 转义的点：字段名里真的有点，而不是 section 分隔。
+                // An escaped dot: the field name really contains a dot, not a section separator.
                 r"a\.b=x",
                 Assignment {
                     section: None,
@@ -2041,7 +2044,7 @@ mod tests {
                 },
             ),
             (
-                // 转义的等号留在值里。
+                // An escaped equals sign stays in the value.
                 r"password=pa\=ss",
                 Assignment {
                     section: None,
@@ -2094,18 +2097,18 @@ mod tests {
         assert_eq!(e.field("token").map(|f| f.value()), Some("one"));
         assert_eq!(e.fields.len(), 3);
 
-        // 带 section 的删除只删该 section 的那一个。
+        // A delete with a section removes only that section's field.
         apply_assignments(&mut e, &[parse_assignment("prod.token=[delete]").unwrap()]);
         let remaining: Vec<&Field> = e.fields.iter().filter(|f| f.id == "token").collect();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].section.as_deref(), Some("dev"));
 
-        // 新字段默认隐藏——D1 下"没说要明文"就等于隐藏。
+        // New fields are concealed by default — under D1, not asking for plaintext means concealed.
         let plain = e.field("plain").expect("plain");
         assert!(plain.is_concealed());
     }
 
-    // 2. set 新建 → 更新
+    // 2. set: create → update
     #[test]
     fn set_creates_then_updates_in_place() {
         let mut vault = Vault::default();
@@ -2163,7 +2166,7 @@ mod tests {
         assert!(!outcome.created);
     }
 
-    // 3. --stdin 两种形态
+    // 3. The two shapes of --stdin
     #[test]
     fn stdin_forms_land_in_the_right_fields() {
         let mut e = entry("github", Category::Login);
@@ -2177,16 +2180,16 @@ mod tests {
         assert_eq!(e.field("username").map(|f| f.value()), Some("me"));
         assert_eq!(e.field("password").map(|f| f.value()), Some("pw"));
 
-        // 裸秘密值：落到 category 的默认秘密字段，已有值被覆盖。
+        // A bare secret value lands in the category's default secret field, overwriting any existing value.
         apply_stdin(&mut e, CANARY, None).unwrap();
         assert_eq!(e.field("password").map(|f| f.value()), Some(CANARY));
         assert_eq!(e.field("username").map(|f| f.value()), Some("me"));
 
-        // --secret-field 覆盖默认目标。
+        // --secret-field overrides the default target.
         apply_stdin(&mut e, "token-value\n", Some("username")).unwrap();
         assert_eq!(e.field("username").map(|f| f.value()), Some("token-value"));
 
-        // env-bundle 没有默认秘密字段。
+        // env-bundle has no default secret field.
         let err = apply_stdin(&mut entry("env", Category::EnvBundle), "raw", None).unwrap_err();
         assert!(matches!(err, Error::Usage(_)));
         apply_stdin(
@@ -2197,7 +2200,7 @@ mod tests {
         .unwrap();
     }
 
-    // 4. 密码配方
+    // 4. Password recipes
     #[test]
     fn password_recipe_parsing_and_charset() {
         let default = parse_recipe("").unwrap();
@@ -2216,7 +2219,7 @@ mod tests {
         assert!(matches!(parse_recipe("0").unwrap_err(), Error::Usage(_)));
         assert!(matches!(parse_recipe("s,99999").unwrap_err(), Error::Usage(_)));
 
-        // 固定字节源 → 确定性断言长度与字符集。
+        // A fixed byte source → deterministic assertions on length and character set.
         let mut counter = 0u8;
         let generated = password_from_bytes(&digits_only, move || {
             let value = counter;
@@ -2229,7 +2232,7 @@ mod tests {
             "digits-only recipe leaked other classes: {generated}"
         );
 
-        // letters+digits 的池子：字节 0..61 依次覆盖 a-z A-Z 0-9。
+        // The letters+digits pool: bytes 0..61 cover a-z, A-Z, 0-9 in order.
         let letters_digits = parse_recipe("letters,digits,62").unwrap();
         let mut counter = 0u8;
         let generated = password_from_bytes(&letters_digits, move || {
@@ -2242,7 +2245,7 @@ mod tests {
         assert!(generated.chars().any(|c| c.is_ascii_alphabetic()));
         assert!(generated.chars().all(|c| c.is_ascii_alphanumeric()));
 
-        // 真随机源也必须守住长度与字符集。
+        // A truly random source must hold the length and character set too.
         let random = generate_password(&digits_only);
         assert_eq!(random.len(), 16);
         assert!(random.chars().all(|c| c.is_ascii_digit()));
@@ -2262,7 +2265,7 @@ mod tests {
         let mut conflicting = set_plan("other", None, &[]);
         conflicting.generate_password = Some(String::new());
         conflicting.stdin_text = Some("x".to_string());
-        // 命令行层会先拒绝这种组合；纯函数层只保证生成的密码不为空。
+        // The CLI layer rejects this combination first; the pure-function layer only guarantees the generated password is non-empty.
         let outcome = apply_set(&mut vault, &conflicting, now()).unwrap();
         assert!(!outcome.entry.field("credential").unwrap().value().is_empty());
     }
@@ -2309,12 +2312,12 @@ mod tests {
         assert_eq!(select_entries(&vault, &list_args(&[], false, None), t).unwrap().len(), 0);
         assert_eq!(select_entries(&vault, &list_args(&[], true, None), t).unwrap().len(), 1);
 
-        // 幂等：再删一次不算失败。
+        // Idempotent: deleting again is not a failure.
         let again = apply_rm(&mut vault, &["openai".to_string()], false, t);
         assert!(again.failed.is_empty());
         assert_eq!(again.results[0].action, "already_deleted");
 
-        // 不存在的条目 → 失败但报告里带着成功项。
+        // A nonexistent entry → failure, but the report still carries the successful items.
         let third = apply_rm(
             &mut vault,
             &["openai".to_string(), "ghost".to_string()],
@@ -2352,7 +2355,7 @@ mod tests {
         let second = apply_restore(&mut vault, &[id.to_string()], t);
         assert_eq!(second.results[0].action, "already_live");
 
-        // 同名冲突 → usage。
+        // Name collision → usage.
         let mut other = entry("openai", Category::Apikey);
         other.deleted_at = Some(t);
         let other_id = other.id;
@@ -2412,7 +2415,7 @@ mod tests {
         assert_eq!(vault.entries[&copy.id].name, "openai-staging");
         assert_eq!(vault.entries.len(), 2);
 
-        // 改名到已占用的名字 → usage；改成自己不会误报。
+        // Renaming onto a taken name → usage; renaming to itself must not false-alarm.
         assert!(matches!(
             apply_mv(&mut vault, "openai-staging", "openai", t).unwrap_err(),
             Error::Usage(_)
@@ -2424,7 +2427,7 @@ mod tests {
         ));
     }
 
-    // 8. list 过滤与排序
+    // 8. list filtering and ordering
     #[test]
     fn list_filters_and_ordering_are_deterministic() {
         let t = now();
@@ -2460,12 +2463,12 @@ mod tests {
         let with_deleted = select_entries(&vault, &list_args(&[], true, None), t).unwrap();
         assert_eq!(with_deleted.len(), 5);
 
-        // tags 是 AND 语义。
+        // tags are AND semantics.
         let llm_prod = select_entries(&vault, &list_args(&["llm", "prod"], false, None), t).unwrap();
         assert_eq!(llm_prod.len(), 1);
         assert_eq!(llm_prod[0].name, "prod-key");
 
-        // --expiring 的边界：正好 30 天算、31 天不算、已过期不算、没写日期不算。
+        // The --expiring boundary: exactly 30 days counts, 31 days does not, already expired does not, no date does not.
         let expiring = select_entries(&vault, &list_args(&[], false, Some("30d")), t).unwrap();
         let names: Vec<&str> = expiring.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["dev-key", "soon"], "boundary must be inclusive");
@@ -2512,7 +2515,7 @@ mod tests {
         assert_eq!(views[0].original.as_deref(), Some("openai"));
         assert!(views[0].original_exists);
 
-        // --theirs：内容搬过来，ID / created_at 保持，副本消失，tag 清掉。
+        // --theirs: the content moves over, ID / created_at stay, the copy goes away, the tag is cleared.
         let mut vault = vault_with(vec![base.clone(), copy.clone()]);
         let outcome = apply_resolve(&mut vault, "openai", Side::Theirs, t).unwrap();
         assert_eq!(outcome.removed, vec!["openai.conflict.9f2a".to_string()]);
@@ -2529,7 +2532,7 @@ mod tests {
         assert!(vault.purged.contains_key(&copy_id));
         assert!(conflict_views(&vault).is_empty());
 
-        // --ours：原名条目内容不动，副本消失。
+        // --ours: the original-name entry keeps its content, the copy goes away.
         let mut vault = vault_with(vec![base.clone(), copy.clone()]);
         apply_resolve(&mut vault, "openai", Side::Ours, t).unwrap();
         let kept = &vault.entries[&base_id];
@@ -2540,11 +2543,11 @@ mod tests {
         assert!(kept.tags.is_empty());
         assert!(!vault.entries.contains_key(&copy_id));
 
-        // 用副本名也能定位到原名条目。
+        // The copy's name also locates the original-name entry.
         let mut vault = vault_with(vec![base.clone(), copy.clone()]);
         assert!(apply_resolve(&mut vault, "openai.conflict.9f2a", Side::Ours, t).is_ok());
 
-        // 没有副本 → usage；条目不存在 → not_found。
+        // No copy → usage; no such entry → not_found.
         let mut lonely = vault_with(vec![base.clone()]);
         assert!(matches!(
             apply_resolve(&mut lonely, "openai", Side::Ours, t).unwrap_err(),
@@ -2569,7 +2572,7 @@ mod tests {
         assert!(ctx_side(true, true).is_err());
     }
 
-    // 10. 输出里绝不出现明文
+    // 10. Plaintext never appears in output
     #[test]
     fn json_output_never_leaks_field_values() {
         let mut e = entry("openai", Category::Apikey);
@@ -2586,13 +2589,13 @@ mod tests {
         assert!(hidden.contains("https://example.test"), "plain fields stay visible");
         assert!(hidden.contains("akey://default/openai/credential"));
 
-        // 摘要（list）连字段值都不带。
+        // The summary (list) does not even carry field values.
         let summary = serde_json::to_string(&EntrySummary::from_entry(&e)).unwrap();
         assert!(!summary.contains(CANARY));
         assert!(!summary.contains("https://example.test"));
         assert!(summary.contains("\"field_count\":3"));
 
-        // set --dry-run 的预览同样只出占位符。
+        // The set --dry-run preview likewise shows only the placeholder.
         let mut vault = Vault::default();
         let plan = set_plan("leaky", Some(Category::Apikey), &[]);
         let outcome = apply_set(&mut vault, &plan, now()).unwrap();
@@ -2602,7 +2605,7 @@ mod tests {
         assert!(!preview.contains(CANARY), "dry-run preview leaked: {preview}");
         assert!(preview.contains(REDACTED));
 
-        // 逃生口：显式 reveal 才出明文。
+        // The escape hatch: plaintext only on an explicit reveal.
         assert!(serde_json::to_string(&entry_view(&e, true)).unwrap().contains(CANARY));
     }
 
@@ -2620,12 +2623,12 @@ mod tests {
             argv_secret_labels(&e, &[secret.clone(), plain.clone()]),
             vec!["credential".to_string()]
         );
-        // 值为空不算泄露。
+        // An empty value is not a leak.
         let empty = parse_assignment("credential=").unwrap();
         assert!(argv_secret_labels(&e, &[empty]).is_empty());
     }
 
-    // 令牌是只读凭据：所有写命令必须在碰 vault 之前就被拒。
+    // A token is a read-only credential: every write command must be rejected before it touches the vault.
     #[test]
     fn write_commands_are_denied_for_capability_tokens() {
         use crate::cli::{Cli, Command};
@@ -2633,7 +2636,7 @@ mod tests {
 
         let home = tempfile::tempdir().unwrap();
         let home = home.path().to_str().unwrap().to_string();
-        // 令牌值不重要：闸门只看 `AKEY_TOKEN`/`--token` 是否存在。
+        // The token value does not matter: the gate only looks at whether `AKEY_TOKEN`/`--token` is present.
         let ctx_for = |extra: &[&str]| {
             let mut argv = vec!["akey", "--home", home.as_str(), "--token", "tok"];
             argv.extend_from_slice(extra);

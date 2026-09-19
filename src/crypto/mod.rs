@@ -1,4 +1,4 @@
-//! 密码学。唯一入口——上层不得直接依赖 `age`。
+//! Cryptography. The sole entry point — layers above must not depend on `age` directly.
 
 pub mod boxcrypto;
 pub mod identity;

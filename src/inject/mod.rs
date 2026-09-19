@@ -1,4 +1,4 @@
-//! 注入与遮蔽。
+//! Injection and masking.
 
 pub mod mask;
 pub mod run;

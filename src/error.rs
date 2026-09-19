@@ -1,62 +1,62 @@
-//! 错误分类与退出码。
+//! Error classification and exit codes.
 //!
-//! 退出码是**对外契约**的一部分（见 `REQUIREMENTS.md` FR-3），改动即破坏兼容。
+//! Exit codes are part of the **public contract** (see `REQUIREMENTS.md` FR-3); changing them breaks compatibility.
 
 use serde::Serialize;
 
-/// 稳定错误码字符串，出现在 `--json` 信封与审计日志中。
+/// Stable error-code string, appearing in the `--json` envelope and the audit log.
 pub type Code = &'static str;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// 参数/用法错误。退出 2。
+    /// Argument/usage error. Exit 2.
     #[error("{0}")]
     Usage(String),
 
-    /// 条目、字段、设备、令牌不存在。退出 3。
+    /// Entry, field, device, or token does not exist. Exit 3.
     #[error("{0}")]
     NotFound(String),
 
-    /// 名字不够唯一，无法确定目标。退出 3。
+    /// Name is not unique enough to pin down a target. Exit 3.
     #[error("{0}")]
     Ambiguous(String),
 
-    /// 无身份 / 解不开 / 密码错 / 令牌无效。退出 4。
+    /// No identity / cannot decrypt / wrong passphrase / invalid token. Exit 4.
     #[error("{0}")]
     Locked(String),
 
-    /// 同步产生冲突且需人工收敛。退出 5。
+    /// Sync produced a conflict that needs manual resolution. Exit 5.
     #[error("{0}")]
     Conflict(String),
 
-    /// git 或远端操作失败。退出 6。
+    /// git or remote operation failed. Exit 6.
     #[error("{0}")]
     SyncFailed(String),
 
-    /// reveal 被策略拒绝（条目 reveal=deny、AKEY_NO_REVEAL、令牌 deny_reveal）。退出 7。
+    /// reveal rejected by policy (entry reveal=deny, AKEY_NO_REVEAL, token deny_reveal). Exit 7.
     #[error("{0}")]
     Denied(String),
 
-    /// 令牌作用域不足。退出 8。
+    /// Token scope is insufficient. Exit 8.
     #[error("{0}")]
     TokenScope(String),
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
-    /// 加解密失败。退出 1。
+    /// Encryption/decryption failed. Exit 1.
     #[error("{0}")]
     Crypto(String),
 
-    /// 密文或文件结构损坏。退出 1。
+    /// Ciphertext or file structure is corrupt. Exit 1.
     #[error("{0}")]
     Corrupt(String),
 
-    /// git 子进程异常。退出 1（区别于 SyncFailed：那是业务层的同步失败）。
+    /// git subprocess misbehaved. Exit 1 (distinct from SyncFailed: that is a business-level sync failure).
     #[error("{0}")]
     Git(String),
 
-    /// 功能未实现或平台不支持。退出 1。
+    /// Feature not implemented or platform unsupported. Exit 1.
     #[error("{0}")]
     Unsupported(String),
 }
@@ -94,7 +94,7 @@ impl Error {
         }
     }
 
-    /// 面向 agent 的下一步提示。仅在有明确行动时返回。
+    /// Next-step hint aimed at an agent. Returned only when there is a concrete action.
     pub fn hint(&self) -> Option<&'static str> {
         match self {
             Error::NotFound(_) => Some("run `akey list` to see available entries"),
@@ -134,7 +134,7 @@ impl Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// `--json` 失败信封。
+/// `--json` failure envelope.
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
     pub code: Code,
@@ -157,7 +157,7 @@ impl From<&Error> for ErrorBody {
 mod tests {
     use super::*;
 
-    /// 退出码是对外契约，逐条钉死。
+    /// Exit codes are a public contract; pinned one by one.
     #[test]
     fn exit_codes_match_contract() {
         let cases: Vec<(Error, i32, Code)> = vec![

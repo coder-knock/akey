@@ -1,7 +1,7 @@
-//! CLI 契约测试：信封、退出码、stdout/stderr 分离、明文永不外泄。
+//! CLI contract tests: envelope, exit codes, stdout/stderr separation, plaintext never leaking.
 //!
-//! 这些断言来自 `REQUIREMENTS.md` FR-3 / FR-4 与 `DESIGN.md` §10、§12——
-//! 它们是**对外契约**，不是实现细节。
+//! These assertions come from `REQUIREMENTS.md` FR-3 / FR-4 and `DESIGN.md` §10, §12 —
+//! they are the **public contract**, not implementation details.
 
 mod common;
 
@@ -17,7 +17,7 @@ fn with_entry() -> Device {
     device
 }
 
-// --------------------------------------------------------------- 信封与流分离
+// --------------------------------------------------------------- envelope and stream separation
 
 #[test]
 fn json_success_is_a_single_ok_envelope_on_stdout() {
@@ -25,7 +25,7 @@ fn json_success_is_a_single_ok_envelope_on_stdout() {
     let data = device.json_ok(&["list"]);
     assert!(data["entries"].is_array());
 
-    // stdout 必须是**一个** JSON 文档，且诊断不混进来。
+    // stdout must be **one** JSON document, with no diagnostics mixed in.
     let raw = device.stdout(&["--json", "list"]);
     assert_eq!(raw.trim().lines().count(), 1, "stdout must be one JSON document");
 }
@@ -51,7 +51,7 @@ fn human_mode_keeps_diagnostics_off_stdout() {
     assert!(!out.stderr.is_empty(), "human mode must explain the failure on stderr");
 }
 
-// --------------------------------------------------------------- 退出码
+// --------------------------------------------------------------- exit codes
 
 #[test]
 fn exit_codes_match_the_documented_contract() {
@@ -99,7 +99,7 @@ fn token_scope_violation_is_exit_8() {
         .unwrap();
     assert_eq!(out.status.code(), Some(8), "token must not reach 'openai'");
 
-    // 越权优先于"禁 reveal"：同时命中两者时，报更准确的那个。
+    // Out-of-scope wins over "no reveal": when both apply, report the more precise one.
     let locked_down = device.json_ok(&[
         "token",
         "create",
@@ -122,7 +122,7 @@ fn token_scope_violation_is_exit_8() {
         "an out-of-scope entry must report token_scope, not a vague denial"
     );
 
-    // 允许范围内的条目仍然可用。
+    // Entries within scope still work.
     let out = device
         .command()
         .env("AKEY_TOKEN", token)
@@ -133,7 +133,7 @@ fn token_scope_violation_is_exit_8() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("sk-other"));
 }
 
-/// 令牌是只读凭据：作用域不能被写命令绕过。
+/// A token is a read-only credential: scope cannot be bypassed by write commands.
 #[test]
 fn a_token_cannot_write() {
     let device = with_entry();
@@ -160,11 +160,11 @@ fn a_token_cannot_write() {
         );
     }
 
-    // 库没被动过。
+    // The vault was not touched.
     assert_eq!(entry_names(&device), vec!["openai".to_string()]);
 }
 
-/// 关键回归：作用域必须对注入同样生效，否则 `--allow` 形同虚设。
+/// Key regression: scope must apply to injection too, otherwise `--allow` is meaningless.
 #[test]
 fn token_scope_cannot_be_bypassed_by_injection() {
     let device = with_entry();
@@ -199,7 +199,7 @@ fn token_scope_cannot_be_bypassed_by_injection() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains(CANARY), "secret escaped through run: {stdout}");
 
-    // 作用域内的条目仍然可以注入。
+    // In-scope entries can still be injected.
     let out = device
         .command()
         .env("AKEY_TOKEN", token)
@@ -245,10 +245,12 @@ fn export_under_a_token_only_covers_the_scope() {
     assert!(!stdout.contains(CANARY), "export leaked an out-of-scope entry");
 }
 
-/// 能力令牌是只读凭据——**包括不能改密码学边界本身**。
+/// A capability token is a read-only credential — **including being unable to change the
+/// cryptographic boundary itself**.
 ///
-/// 曾经漏了 admin 侧：一个被限制在单条目上的令牌可以 `token create` 铸出**无限制**令牌
-/// 再读全库；还能 `recovery set` 给自己留一把运营者看不见的恢复密码。两条都实测过。
+/// The admin side used to be missed: a token scoped to a single entry could `token create` an
+/// **unrestricted** token and then read the whole vault; it could also `recovery set` a recovery
+/// passphrase for itself that the operator never sees. Both were reproduced.
 #[test]
 fn a_scoped_token_cannot_mutate_admin_state() {
     let device = with_entry();
@@ -278,7 +280,7 @@ fn a_scoped_token_cannot_mutate_admin_state() {
         );
     }
 
-    // 库没被改过：没有新令牌，也没有被植入恢复密码。
+    // The vault was not modified: no new token and no planted recovery passphrase.
     let tokens = device.json_ok(&["token", "list"]);
     let names: Vec<&str> = tokens["tokens"]
         .as_array()
@@ -302,13 +304,14 @@ fn entry_names(device: &Device) -> Vec<String> {
     names
 }
 
-// --------------------------------------------------------------- 明文暴露控制
+// --------------------------------------------------------------- plaintext exposure control
 
-/// `inject` 把渲染结果直接交给调用者，所以它是**明文通道**，不是 `run` 的同桌。
+/// `inject` hands the rendered result straight to the caller, so it is a **plaintext channel**,
+/// not a peer of `run`.
 ///
-/// 这三条覆盖同一个根因：设计文档曾把 inject 与 run 归为一类，于是条目策略、
-/// `AKEY_NO_REVEAL`、令牌 `--deny-reveal` 三道闸门全都没装到 inject 上——
-/// 一句 `printf 'x=akey://openai/credential' | akey inject` 就能把明文取走。
+/// These three cover the same root cause: the design doc once lumped inject together with run,
+/// so the entry policy, `AKEY_NO_REVEAL`, and the token `--deny-reveal` gates were never fitted
+/// to inject — a single `printf 'x=akey://openai/credential' | akey inject` could extract plaintext.
 #[test]
 fn inject_cannot_route_around_a_global_reveal_ban() {
     let device = with_entry();
@@ -347,7 +350,7 @@ fn inject_respects_a_per_entry_reveal_deny() {
     assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
 }
 
-/// 掩蔽是"run 不把明文交给调用者"的实现方式，所以关掉它的开关必须受同一套策略约束。
+/// Masking is how "run does not hand plaintext to the caller" is implemented, so the switch that turns it off must be bound by the same policy set.
 #[test]
 fn run_refuses_no_masking_while_reveal_is_forbidden() {
     let device = with_entry();
@@ -369,7 +372,7 @@ fn run_refuses_no_masking_while_reveal_is_forbidden() {
     assert_eq!(out.status.code(), Some(7));
     assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
 
-    // 掩蔽开着时，同样的 run 仍然可用（只是看不到明文）。
+    // With masking on, the same run still works (you just cannot see the plaintext).
     let out = device.run(&[
         "run",
         "--with",
@@ -383,7 +386,7 @@ fn run_refuses_no_masking_while_reveal_is_forbidden() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("concealed by akey"));
 }
 
-/// `export` 是整库明文出库，不能把明确标了"永不取明文"的条目一起带走。
+/// `export` takes the whole vault out in the clear, so it must not carry along entries explicitly marked "never take plaintext".
 #[test]
 fn export_refuses_entries_marked_reveal_deny() {
     let device = with_entry();
@@ -395,11 +398,11 @@ fn export_refuses_entries_marked_reveal_deny() {
     assert_eq!(kind, "denied");
     assert!(stdout.is_empty());
 
-    // 提示里点名了是哪个条目——否则用户无从下手。
+    // The hint names which entry — otherwise the user has no way in.
     let stderr = device.stderr(&["export", "--as", "json", "--yes"]);
     assert!(stderr.contains("quiet"), "the error must name the offending entry");
 
-    // 明确改回 allow 之后才放行，并且是**显式**的一步。
+    // It only lets it through after an explicit change back to allow, and that is a **deliberate** step.
     device.json_ok(&["edit", "quiet", "--reveal-policy", "allow"]);
     device.json_ok(&["export", "--as", "json", "--yes"]);
 }
@@ -445,13 +448,13 @@ fn entry_can_be_pinned_to_deny_reveal() {
     assert_eq!(kind, "denied");
 }
 
-// --------------------------------------------------------------- 注入
+// --------------------------------------------------------------- injection
 
 #[test]
 fn run_injects_a_secret_into_the_child_and_masks_any_echo() {
     let device = with_entry();
 
-    // 1. 子进程确实拿到了明文。
+    // 1. The child process really got the plaintext.
     let out = device.run(&[
         "run",
         "--with",
@@ -463,7 +466,7 @@ fn run_injects_a_secret_into_the_child_and_masks_any_echo() {
     ]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
-    // 2. 子进程回显时被遮蔽，明文不进调用者的 stdout。
+    // 2. Echoing from the child is masked, so plaintext never reaches the caller's stdout.
     let out = device.run(&[
         "run",
         "--with",
@@ -522,7 +525,7 @@ fn inject_renders_a_template_without_printing_to_the_caller() {
     assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
 }
 
-// --------------------------------------------------------------- 审计与自举
+// --------------------------------------------------------------- audit and bootstrap
 
 #[test]
 fn audit_log_records_actions_without_secrets() {
@@ -559,11 +562,11 @@ fn schema_is_machine_readable_and_complete() {
     }
 }
 
-// --------------------------------------------------------------- 非交互
+// --------------------------------------------------------------- non-interactive
 
 #[test]
 fn commands_never_block_waiting_for_input() {
-    // 所有命令都必须能在没有 TTY、stdin 已关闭的环境下跑完。
+    // Every command must complete with no TTY and stdin closed.
     let device = with_entry();
     for args in [
         vec!["list"],
@@ -588,7 +591,7 @@ fn sync_without_a_remote_is_not_an_error() {
     assert_eq!(data["outcome"], "no_remote");
 }
 
-// --------------------------------------------------------------- 远端存在但不可达
+// --------------------------------------------------------------- remote present but unreachable
 
 #[test]
 fn sync_reports_a_broken_remote_as_sync_failed() {
@@ -597,7 +600,7 @@ fn sync_reports_a_broken_remote_as_sync_failed() {
     let url = bare_remote(&remote);
     device.init("testbox", &["--remote", &url]);
 
-    // 把远端抽走，让 fetch 失败。
+    // Pull the remote away so fetch fails.
     std::fs::remove_dir_all(remote.path().join("remote.git")).unwrap();
 
     let (code, kind, _) = device.expect_failure(&["sync"]);
@@ -605,10 +608,11 @@ fn sync_reports_a_broken_remote_as_sync_failed() {
     assert_eq!(kind, "sync_failed");
 }
 
-// --------------------------------------------------------------- 其余命令面
+// --------------------------------------------------------------- the rest of the command surface
 //
-// 这一组覆盖的是"只有走真实 CLI 才会暴露"的路径——参数 id 撞车、子命令没接线、
-// 错误码映射错位之类的问题，单元测试全都看不见。`--format` 撞车就是这么漏过去的。
+// This group covers the paths that only the real CLI exposes — clashing argument ids,
+// un-wired subcommands, misaligned error-code mappings, and the like, none of which unit
+// tests can see. A `--format` clash slipped through exactly this way.
 
 #[test]
 fn every_category_has_a_usable_template() {
@@ -627,7 +631,7 @@ fn every_category_has_a_usable_template() {
     }
     let listed = device.json_ok(&["template", "list"]);
     assert_eq!(listed["categories"].as_array().unwrap().len(), 7);
-    // 每个分类都要报出它的默认秘密字段——`set --stdin` 不带字段名时靠它。
+    // Every category must report its default secret field — `set --stdin` relies on it when no field name is given.
     for entry in listed["categories"].as_array().unwrap() {
         assert!(
             entry["default_secret_field"].is_string(),
@@ -647,7 +651,7 @@ fn copy_move_remove_and_restore_round_trip() {
     device.json_ok(&["mv", "openai-copy", "openai-moved"]);
     assert_eq!(entry_names(&device), vec!["openai", "openai-moved"]);
 
-    // 软删后默认看不见，--all 看得见，restore 能救回来。
+    // After a soft delete it is hidden by default, visible with --all, and restorable.
     device.json_ok(&["rm", "openai-moved"]);
     assert_eq!(entry_names(&device), vec!["openai"]);
     let all = device.json_ok(&["list", "--all"]);
@@ -655,7 +659,7 @@ fn copy_move_remove_and_restore_round_trip() {
     device.json_ok(&["restore", "openai-moved"]);
     assert_eq!(entry_names(&device), vec!["openai", "openai-moved"]);
 
-    // --purge 之后彻底消失。
+    // After --purge it is gone for good.
     device.json_ok(&["rm", "openai-moved", "--purge"]);
     let all = device.json_ok(&["list", "--all"]);
     assert_eq!(all["entries"].as_array().unwrap().len(), 1);
@@ -669,7 +673,7 @@ fn edit_updates_metadata_without_touching_the_secret() {
     let data = device.json_ok(&["get", "openai"]);
     assert_eq!(data["title"], "OpenAI");
     assert_eq!(data["tags"].as_array().unwrap().len(), 2);
-    // 值没被动过，且依然隐藏。
+    // The value was not touched and is still concealed.
     assert!(!serde_json::to_string(&data).unwrap().contains(CANARY));
     assert!(
         device
@@ -706,7 +710,7 @@ fn export_needs_yes_and_import_round_trips() {
     let other = Device::initialized("other");
     other.json_ok(&["import", "--as", "json", "-i", dump.to_str().unwrap()]);
 
-    // 重名必须挡下来，--merge 才放行。
+    // A name clash must be blocked; only --merge lets it through.
     let (code, _, _) = other.expect_failure(&["import", "--as", "json", "-i", dump.to_str().unwrap()]);
     assert_eq!(code, 2);
     other.json_ok(&["import", "--as", "json", "-i", dump.to_str().unwrap(), "--merge"]);
@@ -740,7 +744,7 @@ fn mcp_speaks_json_rpc_and_never_returns_values() {
         .map(|l| serde_json::from_str(l).expect("every reply must be one JSON document"))
         .collect();
 
-    // 6 条请求里有一条是通知，按 JSON-RPC 不该有回复。
+    // One of the 6 requests is a notification, which per JSON-RPC must not be answered.
     assert_eq!(replies.len(), 5, "notifications must not be answered: {stdout}");
 
     let by_id = |id: i64| {
@@ -753,7 +757,7 @@ fn mcp_speaks_json_rpc_and_never_returns_values() {
     assert!(by_id(2)["result"]["tools"].is_array());
     assert_eq!(by_id(5)["error"]["code"], -32601, "unknown method");
 
-    // 安全底线：这个通道永不外泄字段值。
+    // The security floor: this channel never leaks field values.
     assert!(
         !stdout.contains(CANARY),
         "MCP leaked a secret: {stdout}"
@@ -775,7 +779,7 @@ fn recovery_rotate_changes_the_passphrase_non_interactively() {
     let device = Device::initialized("testbox");
     device.enable_recovery("the-first-passphrase");
 
-    // 新旧分开提供，否则非交互下两次读的是同一个值。
+    // Old and new are supplied separately, otherwise non-interactively both reads get the same value.
     device.run_ok_with_env(
         &["recovery", "rotate"],
         &[
@@ -816,7 +820,7 @@ fn recovery_rotate_refuses_to_be_a_no_op() {
 fn a_weak_recovery_passphrase_is_refused_from_any_source() {
     let device = Device::initialized("testbox");
 
-    // 环境变量这条路曾经绕过长度校验，能设出单字符密码。
+    // The environment-variable path used to bypass the length check, allowing a single-character passphrase.
     let out = device.run_with_env(&["recovery", "set"], &[("AKEY_RECOVERY_PASSPHRASE", "a")]);
     assert_eq!(out.status.code(), Some(2), "1-character passphrase must be refused");
     assert!(String::from_utf8_lossy(&out.stderr).contains("at least"));
@@ -847,10 +851,11 @@ fn devices_rename_is_visible_in_the_recipient_list() {
     assert_eq!(listed["devices"][0]["this_device"], true);
 }
 
-/// 面向 agent 的文档不能悄悄落后于 CLI。
+/// Agent-facing docs must not quietly fall behind the CLI.
 ///
-/// 一个 agent 只会照着文档与 `akey schema` 行动——新命令没写进文档，等于那条命令对它不存在。
-/// 这是会真实发生的疏漏（本轮就有 8 条命令一度没被写上）。
+/// An agent only acts on the docs and `akey schema` — a new command missing from the docs is a
+/// command that does not exist for it. This is a real slip that happens (this round, 8 commands
+/// were once left out).
 #[test]
 fn agent_documentation_covers_every_command() {
     let device = Device::initialized("testbox");

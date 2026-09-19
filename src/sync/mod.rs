@@ -1,9 +1,12 @@
-//! 跨设备同步：把解密后的三方合并结果推成 git 上的新提交。
+//! Cross-device sync: push the decrypted three-way merge result as a new commit on git.
 //!
-//! 算法见 `DESIGN.md` §8。两条要点：
-//! 1. **先落定工作区**，之后 `ours` 恒等于 `HEAD`，比较才有意义。
-//! 2. 分叉时**先 `reset --soft` 到远端**再提交合并结果——否则我们的提交不以远端为祖先，
-//!    push 仍会被拒，陷入死循环。这样得到的是线性历史，下一台设备也更好合。
+//! The algorithm is in `DESIGN.md` §8. Two essentials:
+//! 1. **Settle the working tree first**, after which `ours` always equals `HEAD`, so the
+//!    comparison is meaningful.
+//! 2. On divergence, **`reset --soft` onto the remote first** and then commit the merge
+//!    result — otherwise our commit does not have the remote as an ancestor, the push is
+//!    rejected again, and it loops forever. This also yields linear history that the next
+//!    device merges more easily.
 
 use chrono::Utc;
 
@@ -17,25 +20,26 @@ pub mod git;
 
 pub use git::{Git, PushOutcome};
 
-/// push 被拒后的最大重试次数。超过说明有其他设备在并发写，交给用户。
+/// Maximum retries after a rejected push. Exceeding it means another device is writing
+/// concurrently, so it is handed back to the user.
 pub const MAX_PUSH_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum SyncMode {
-    /// 双向：先拉后推，必要时合并。
+    /// Both ways: pull first, then push, merging when needed.
     #[default]
     Auto,
-    /// 只推本地提交。
+    /// Push local commits only.
     Push,
-    /// 只拉远端，且仅允许快进。
+    /// Pull only, and only fast-forward.
     Pull,
-    /// 只看状态，不改动任何东西。
+    /// Report status only; change nothing.
     Status,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncOutcome {
-    /// 未配置远端——不是错误，本地库照常可用。
+    /// No remote configured — not an error; the local vault keeps working.
     NoRemote,
     UpToDate,
     Pulled {
@@ -44,12 +48,12 @@ pub enum SyncOutcome {
     Pushed {
         commits: usize,
     },
-    /// 发生分叉并已合并（可能带冲突副本）并推送。
+    /// The histories diverged; merged (possibly producing conflict copies) and pushed.
     Merged {
         conflicts: Vec<Conflict>,
         stats: MergeStats,
     },
-    /// `--status` 结果。
+    /// The `--status` result.
     Status {
         ahead: usize,
         behind: usize,
@@ -87,7 +91,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
         return Ok(SyncOutcome::NoRemote);
     }
 
-    // 先把工作区落定，这样 `ours` 就是 HEAD 的内容。
+    // Settle the working tree first, so `ours` is the content of HEAD.
     git.add_paths(SYNCED_FILES)?;
     git.commit(&format!("akey: local changes from {device}"))?;
 
@@ -103,7 +107,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
         let remote = git.try_rev_parse("FETCH_HEAD")?;
 
         let (Some(local_rev), Some(remote_rev)) = (local, remote) else {
-            // 任一侧还没有提交：直接把本地推上去即可。
+            // Neither side has a commit yet: just push the local side up.
             return match push(&git, mode)? {
                 PushOutcome::Pushed => Ok(SyncOutcome::Pushed { commits: 1 }),
                 PushOutcome::UpToDate => Ok(SyncOutcome::UpToDate),
@@ -119,7 +123,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
         }
 
         if git.is_ancestor(&remote_rev, &local_rev)? {
-            // 本地领先 → 直接推。
+            // Local is ahead → push directly.
             let ahead = git.commit_count(&format!("{remote_rev}..{local_rev}"))?;
             return match push(&git, mode)? {
                 PushOutcome::Pushed => Ok(SyncOutcome::Pushed { commits: ahead }),
@@ -132,7 +136,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
         }
 
         if git.is_ancestor(&local_rev, &remote_rev)? {
-            // 远端领先 → 快进。
+            // Remote is ahead → fast-forward.
             if mode == SyncMode::Push {
                 return Err(Error::SyncFailed(
                     "remote is ahead; run `akey sync` (without --push) to pull and merge".into(),
@@ -140,12 +144,15 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
             }
             let behind = git.commit_count(&format!("{local_rev}..{remote_rev}"))?;
 
-            // 远端版本整体落地之前先保住本地的吊销标记。
+            // Preserve the local revocation markers before the remote revision lands
+            // wholesale.
             //
-            // `reset --hard` 会把工作区（含 recipients.json）换成远端版本。而
-            // `merge_recipients` 的"吊销优先"只在**分叉**路径上跑得到——一个被
-            // `devices rm` 掉的设备只要还有 git 写权限，推一个把自己加回去的普通提交，
-            // 快进路径就会把那本带吊销的清单整个覆盖掉，吊销当场失效。实测可复现。
+            // `reset --hard` replaces the working tree (including recipients.json) with the
+            // remote revision. But `merge_recipients`' "revocation wins" only runs on the
+            // **diverged** path — a device removed with `devices rm` that still has git
+            // write access can push an ordinary commit adding itself back, and the
+            // fast-forward path would overwrite the revoking list entirely, nullifying the
+            // revocation on the spot. Reproduced in practice.
             let ours = store.load_recipients()?;
             let theirs = recipients_at(&git, &remote_rev)?;
             let merged = merge_recipients(&Recipients::default(), &ours, &theirs);
@@ -158,8 +165,9 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
                 git.commit("akey: keep local recipient revocations")?;
             }
 
-            // 快进后必须确认本机仍能解密：否则会静默进入"库在、但打不开"的状态，
-            // 而用户直到下一条命令才知道自己被吊销了。
+            // After a fast-forward, confirm this device can still decrypt: otherwise it
+            // silently enters a "the vault is there but cannot be opened" state, and the
+            // user only learns of their own revocation on the next command.
             store.load().map_err(|e| {
                 Error::Locked(format!(
                     "pulled {behind} commit(s) but this device can no longer decrypt the vault: {e}"
@@ -168,7 +176,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
             return Ok(SyncOutcome::Pulled { commits: behind });
         }
 
-        // 分叉 → 三方合并。
+        // Diverged → three-way merge.
         if mode == SyncMode::Pull {
             return Err(Error::SyncFailed(
                 "local and remote have diverged; run `akey sync` to merge".into(),
@@ -203,7 +211,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
 
 fn push(git: &Git, mode: SyncMode) -> Result<PushOutcome> {
     if mode == SyncMode::Pull {
-        // `--pull` 不推送。
+        // `--pull` never pushes.
         return Ok(PushOutcome::UpToDate);
     }
     git.push()
@@ -224,7 +232,8 @@ fn status(git: &Git) -> Result<SyncOutcome> {
     Ok(SyncOutcome::Status { ahead, behind })
 }
 
-/// 解密三份密文、合并、把结果落成远端之上的一个新提交。
+/// Decrypt three ciphertexts, merge, and land the result as a new commit on top of the
+/// remote.
 fn merge(store: &Store, git: &Git, base_rev: &str, remote_rev: &str) -> Result<MergeOutcome> {
     let base = match git.show_bytes(base_rev, VAULT_FILE)? {
         Some(bytes) => store.open_ciphertext(&bytes)?,
@@ -243,7 +252,8 @@ fn merge(store: &Store, git: &Git, base_rev: &str, remote_rev: &str) -> Result<M
     let ours_recipients = store.load_recipients()?;
     let merged_recipients = merge_recipients(&base_recipients, &ours_recipients, &theirs_recipients);
 
-    // 关键：把 HEAD 移到远端，再提交我们的合并结果 —— 这样提交以远端为祖先，push 才能快进。
+    // Key: move HEAD onto the remote, then commit our merge result — that way the commit
+    // has the remote as an ancestor and the push can fast-forward.
     git.reset_soft(remote_rev)?;
 
     merged_recipients.save(&store.recipients_path())?;
@@ -276,10 +286,11 @@ fn recipients_at(git: &Git, rev: &str) -> Result<Recipients> {
     }
 }
 
-/// 收件人清单的三方合并。
+/// Three-way merge of recipient lists.
 ///
-/// 与条目合并的规则不同，这里**吊销优先**：任一侧吊销过就保持吊销。
-/// 否则两台设备各自同步一次就能把已被吊销的设备复活——那是安全事件，不是合并冲突。
+/// Unlike the entry merge rules, **revocation wins** here: if either side revoked, it stays
+/// revoked. Otherwise two devices could sync once each and resurrect a revoked device —
+/// that is a security incident, not a merge conflict.
 pub fn merge_recipients(base: &Recipients, ours: &Recipients, theirs: &Recipients) -> Recipients {
     let mut merged = Recipients::default();
     let mut keys: Vec<&String> = base
@@ -297,18 +308,19 @@ pub fn merge_recipients(base: &Recipients, ours: &Recipients, theirs: &Recipient
         let t = theirs.recipients.get(key);
 
         let record = match (b, o, t) {
-            (_, None, None) => continue, // 两侧都删了
+            (_, None, None) => continue, // both sides deleted it
             (_, Some(o), None) => o.clone(),
             (_, None, Some(t)) => t.clone(),
             (_, Some(o), Some(t)) => {
                 let mut rec = o.clone();
-                // 名字/类型：以 ours 为准，若 ours 是新增而 theirs 更早则取 theirs 的 added_at。
+                // Name/kind: ours wins; if ours is new but theirs is earlier, take
+                // theirs' added_at.
                 rec.added_at = o.added_at.min(t.added_at);
                 rec.last_seen_at = match (o.last_seen_at, t.last_seen_at) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
-                // 吊销优先，且取更早的那次吊销。
+                // Revocation wins, and the earlier revocation is kept.
                 rec.revoked_at = match (o.revoked_at, t.revoked_at) {
                     (Some(a), Some(b)) => Some(a.min(b)),
                     (a, b) => a.or(b),
@@ -329,7 +341,7 @@ fn sanitise(device: &str) -> String {
         .collect()
 }
 
-/// 供 `doctor` 使用：当前是否有未收敛的冲突条目。
+/// For `doctor`: whether any unresolved conflict entries currently exist.
 pub fn pending_conflicts(vault: &Vault) -> Vec<String> {
     vault
         .live_entries()
@@ -338,7 +350,7 @@ pub fn pending_conflicts(vault: &Vault) -> Vec<String> {
         .collect()
 }
 
-/// 记录同步时间，供人类输出。
+/// Record the sync time, for human-readable output.
 pub fn now() -> chrono::DateTime<Utc> {
     Utc::now()
 }

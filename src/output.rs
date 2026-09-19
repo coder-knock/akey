@@ -1,6 +1,6 @@
-//! 输出纪律：stdout 只放数据，诊断一律 stderr；`--json` 走统一信封。
+//! Output discipline: stdout carries data only, diagnostics always go to stderr; `--json` uses a uniform envelope.
 //!
-//! 这是 AI 消费的**主要接口**，格式即契约（`REQUIREMENTS.md` FR-3）。
+//! This is the **primary interface** AI consumes, so the format is the contract (`REQUIREMENTS.md` FR-3).
 
 use std::io::Write as _;
 
@@ -8,10 +8,10 @@ use serde::Serialize;
 
 use crate::error::{Error, ErrorBody, Result};
 
-/// 隐藏的秘密占位符。长度固定，不泄漏真实长度。
+/// Placeholder for a concealed secret. Fixed length, never leaks the real length.
 pub const REDACTED: &str = "********";
 
-/// `akey run` 遮蔽子进程输出时使用的替换文本。
+/// Replacement text used when `akey run` masks child-process output.
 pub const TAINTED: &str = "<concealed by akey>";
 
 const RESET: &str = "\x1b[0m";
@@ -62,7 +62,7 @@ impl Output {
         }
     }
 
-    /// 单测与库内调用用的默认出口。
+    /// Default sink for unit tests and in-library calls.
     pub fn human() -> Self {
         Output::new(Format::Human, false, false)
     }
@@ -75,7 +75,7 @@ impl Output {
         self.quiet
     }
 
-    /// 成功出口。`human` 与 `data` 必须描述同一件事——两者同源，避免模式间漂移。
+    /// Success sink. `human` and `data` must describe the same thing — one source, so the modes cannot drift apart.
     pub fn emit<T: Serialize>(&self, human: impl Into<String>, data: &T) -> Result<()> {
         match self.format {
             Format::Json => {
@@ -91,12 +91,12 @@ impl Output {
         }
     }
 
-    /// 无数据体的成功（如 `rm`）。
+    /// Success with no data body (e.g. `rm`).
     pub fn emit_empty(&self) -> Result<()> {
         self.emit("", &serde_json::Value::Null)
     }
 
-    /// 人类模式下直接写一行原文；JSON 模式抑制（数据应由 `emit` 负责）。
+    /// In human mode writes one raw line straight through; suppressed in JSON mode (data is `emit`'s job).
     pub fn note(&self, text: &str) {
         if self.format == Format::Human && !self.quiet {
             let _ = writeln!(std::io::stdout(), "{text}");
@@ -148,7 +148,7 @@ impl Default for Output {
     }
 }
 
-/// 我们自己构造的结构不可能序列化失败；真失败也只可能是内部错误。
+/// Structures we construct ourselves cannot fail to serialize; a real failure can only be an internal error.
 fn to_json<T: Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| Error::Io(std::io::Error::other(e)))
 }

@@ -1,11 +1,14 @@
-//! 系统 `git` 的薄封装。
+//! A thin wrapper around the system `git`.
 //!
-//! 为什么是子进程而不是 `gix`：同步要走用户已有的 SSH key、credential helper、
-//! 代理与 `insteadOf` 配置——这些 `git` 全都能用，纯 Rust 实现要重造一遍且更脆。
+//! Why a subprocess and not `gix`: sync rides on the SSH key, credential helper, proxy and
+//! `insteadOf` configuration the user already has — `git` handles all of them, while a pure
+//! Rust implementation would have to rebuild them and would be more fragile.
 //!
-//! 两条纪律：
-//! - **绝不交互**：`GIT_TERMINAL_PROMPT=0`，避免 AI 调用时挂死在密码提示上。
-//! - **消息稳定**：`LC_ALL=C`，否则下面基于 stderr 文案的判断会因本地化而失效。
+//! Two disciplines:
+//! - **Never interactive**: `GIT_TERMINAL_PROMPT=0`, so an AI invocation cannot hang on a
+//!   password prompt.
+//! - **Stable messages**: `LC_ALL=C`, otherwise the stderr-text checks below break under
+//!   localisation.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -16,7 +19,7 @@ use crate::error::{Error, Result};
 pub enum PushOutcome {
     Pushed,
     UpToDate,
-    /// 远端有新提交，需要先合并再推。
+    /// The remote has new commits; merge before pushing.
     Rejected,
 }
 
@@ -39,7 +42,8 @@ impl Git {
         &self.repo
     }
 
-    /// 组装命令。所有 git 调用都必须经此，保证非交互与环境一致。
+    /// Build a command. Every git invocation must go through this, keeping it
+    /// non-interactive and consistent.
     fn command(&self) -> Command {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.repo);
@@ -58,7 +62,7 @@ impl Git {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     }
 
-    /// 返回 `None` 表示命令非 0 退出（用于"允许失败"的探查）。
+    /// `None` means the command exited non-zero (for "failure is allowed" probes).
     fn run_optional(&self, args: &[&str]) -> Result<Option<String>> {
         let out = self.output(args)?;
         if out.status.success() {
@@ -90,7 +94,8 @@ impl Git {
         Ok(())
     }
 
-    /// 克隆远端到 `dest`。目标目录必须为空或不存在（`git clone` 的要求）。
+    /// Clone the remote into `dest`. The destination must be empty or absent (a
+    /// `git clone` requirement).
     pub fn clone(url: &str, dest: &Path) -> Result<Git> {
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;
@@ -112,14 +117,14 @@ impl Git {
         Ok(Git::new(dest, "akey", "akey@akey.invalid"))
     }
 
-    /// 远端 URL，未配置则为 `None`。
+    /// The remote URL, or `None` when unset.
     pub fn remote_url(&self) -> Result<Option<String>> {
         Ok(self
             .run_optional(&["remote", "get-url", "origin"])?
             .filter(|s| !s.is_empty()))
     }
 
-    /// 设定或替换 `origin`。
+    /// Set or replace `origin`.
     pub fn set_remote(&self, url: &str) -> Result<()> {
         if self.remote_url()?.is_some() {
             self.run(&["remote", "set-url", "origin", url])?;
@@ -134,10 +139,12 @@ impl Git {
         Ok(())
     }
 
-    /// 只暂存指定路径。用于避免把误落进仓库目录的文件一起提交。
+    /// Stage only the given paths. It keeps files that stray into the repository directory
+    /// out of the commit.
     ///
-    /// 必须过滤掉"既不在磁盘上、也不在索引里"的路径：`git add -A -- <pathspec>` 遇到
-    /// 这样的路径会直接报错（`init` 时 `recovery.age` 就还不存在）。
+    /// Paths that are neither on disk nor in the index must be filtered out: `git add -A --
+    /// <pathspec>` fails outright on such a path (`recovery.age` does not exist yet during
+    /// `init`).
     pub fn add_paths(&self, paths: &[&str]) -> Result<()> {
         let tracked = self.run(&["ls-files"])?;
         let tracked: std::collections::HashSet<&str> = tracked.lines().collect();
@@ -157,12 +164,14 @@ impl Git {
         Ok(())
     }
 
-    /// 提交暂存区。无内容可提交时返回 `false`（不是错误）。
+    /// Commit the index. Returns `false` when there is nothing to commit (not an error).
     ///
-    /// 先自己问 git"有没有暂存内容"，而不是解析 `nothing to commit` 那句文案：
-    /// `--quiet` 会把它一起压掉，而且文案随版本与语言变化。
+    /// Ask git whether anything is staged instead of parsing the `nothing to commit`
+    /// wording: `--quiet` suppresses it, and the wording drifts across versions and
+    /// locales.
     pub fn commit(&self, message: &str) -> Result<bool> {
-        // 退出码 0 = 无暂存差异；1 = 有。这里不把它当错误，所以走 `output` 而非 `run`。
+        // Exit code 0 = nothing staged; 1 = something staged. Neither counts as an error
+        // here, so this goes through `output` rather than `run`.
         let staged = self.output(&["diff", "--cached", "--quiet"])?;
         if staged.status.success() {
             return Ok(false);
@@ -188,7 +197,8 @@ impl Git {
         if out.status.success() {
             return Ok(true);
         }
-        // 竞态兜底：预检之后、提交之前被别的进程清空了暂存区。
+        // Race fallback: between the pre-check and the commit, another process emptied the
+        // index.
         if combined(&out).contains("nothing to commit") {
             return Ok(false);
         }
@@ -240,9 +250,10 @@ impl Git {
         self.run(&["log", "-1", "--format=%s", rev])
     }
 
-    /// 读取历史版本里的文件原始字节。路径不存在 → `None`。
+    /// Read the raw bytes of a file at a historical revision. Absent path → `None`.
     ///
-    /// 用 `cat-file` 而非 `show`：前者是 plumbing，输出不经文本化处理，二进制安全。
+    /// Uses `cat-file` rather than `show`: the former is plumbing, its output is not
+    /// text-processed, and it is binary-safe.
     pub fn show_bytes(&self, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
         let out = self.output(&["cat-file", "blob", &format!("{rev}:{path}")])?;
         if out.status.success() {
@@ -252,7 +263,7 @@ impl Git {
         }
     }
 
-    /// 把工作区文件强制同步到某个版本。
+    /// Force a working-tree file to match a revision.
     pub fn checkout_from(&self, rev: &str, path: &str) -> Result<()> {
         let out = self.output(&["checkout", rev, "--", path])?;
         if !out.status.success() {
@@ -269,10 +280,11 @@ impl Git {
         Ok(())
     }
 
-    /// 只移动分支指针，保留索引与工作区。
+    /// Move only the branch pointer, keeping the index and working tree.
     ///
-    /// 合并时用它把 HEAD 落到远端之上，再提交合并结果——这样提交以远端为祖先，
-    /// push 能快进；否则每轮同步都会再撞一次非快进。
+    /// A merge uses this to drop HEAD onto the remote before committing the merge result —
+    /// that way the commit has the remote as an ancestor and the push can fast-forward;
+    /// otherwise every round of sync hits another non-fast-forward.
     pub fn reset_soft(&self, rev: &str) -> Result<()> {
         self.run(&["reset", "--soft", rev])?;
         Ok(())
@@ -283,10 +295,11 @@ impl Git {
         Ok(())
     }
 
-    /// 推送当前 HEAD。
+    /// Push the current HEAD.
     ///
-    /// 用 `--porcelain`：它承诺给脚本用的稳定格式（每行以状态标记开头），
-    /// 而不是靠 `Everything up-to-date` 这类会随版本/语言变化的人话。
+    /// Uses `--porcelain`: it promises a stable, script-oriented format (each line starts
+    /// with a status flag) rather than relying on human prose like `Everything up-to-date`
+    /// that drifts across versions and locales.
     pub fn push(&self) -> Result<PushOutcome> {
         let out = self
             .command()
@@ -301,13 +314,14 @@ impl Git {
         if out.status.success() {
             for line in stdout.lines() {
                 match line.chars().next() {
-                    // porcelain 的标记位：`=` 表示已是最新，其余（空格/+/@/-/*/!）表示发生了变更。
+                    // porcelain flags: `=` means already up to date, anything else
+                    // (space / + / @ / - / * / !) means something changed.
                     Some('=') => return Ok(PushOutcome::UpToDate),
                     Some(' ' | '+' | '-' | '*' | '@') => return Ok(PushOutcome::Pushed),
                     _ => {}
                 }
             }
-            // 没给出可解析的行（例如远端无分支）时按"推成功了"处理。
+            // No parseable line (e.g. the remote has no branch) counts as "pushed".
             return Ok(PushOutcome::Pushed);
         }
 
@@ -321,7 +335,7 @@ impl Git {
     }
 }
 
-/// 识别"远端领先"这一类拒绝。`LC_ALL=C` 保证文案稳定。
+/// Recognise "the remote is ahead"-style rejections. `LC_ALL=C` keeps the wording stable.
 pub fn is_non_fast_forward(stderr: &str) -> bool {
     stderr.contains("non-fast-forward")
         || stderr.contains("failed to push some refs")
@@ -338,7 +352,7 @@ fn git_failure(args: &[&str], out: &Output) -> Error {
     ))
 }
 
-/// git 把提示与错误分散在 stdout / stderr，判定时两边都要看。
+/// git spreads hints and errors across stdout / stderr, so both must be inspected.
 fn combined(out: &Output) -> String {
     format!(
         "{}{}",
@@ -461,7 +475,7 @@ mod tests {
         git_in(bare.path(), &["init", "--bare", "--quiet"]);
         let url = format!("file://{}", bare.path().display());
 
-        // 设备 A 推送第一条。
+        // Device A pushes the first commit.
         let (dir_a, git_a) = temp_repo();
         git_a.set_remote(&url).unwrap();
         std::fs::write(git_a.repo().join("a.txt"), b"one").unwrap();
@@ -469,7 +483,7 @@ mod tests {
         git_a.commit("from a").unwrap();
         assert_eq!(git_a.push().unwrap(), PushOutcome::Pushed);
 
-        // 设备 B 克隆后推第二条。
+        // Device B clones and pushes a second commit.
         let dir_b = tempfile::tempdir().unwrap();
         git_in(dir_b.path(), &["clone", "--quiet", &url, "."]);
         let git_b = Git::new(dir_b.path(), "b", "b@example.invalid");
@@ -478,13 +492,13 @@ mod tests {
         git_b.commit("from b").unwrap();
         assert_eq!(git_b.push().unwrap(), PushOutcome::Pushed);
 
-        // A 在不知道 B 的情况下再提交 → push 被拒。
+        // A commits again, unaware of B → the push is rejected.
         std::fs::write(git_a.repo().join("a.txt"), b"three").unwrap();
         git_a.add_all().unwrap();
         git_a.commit("from a again").unwrap();
         assert_eq!(git_a.push().unwrap(), PushOutcome::Rejected);
 
-        // fetch 后能定位分叉点。
+        // After a fetch, the fork point can be located.
         git_a.fetch().unwrap();
         let local = git_a.try_rev_parse("HEAD").unwrap().unwrap();
         let remote = git_a.try_rev_parse("FETCH_HEAD").unwrap().unwrap();

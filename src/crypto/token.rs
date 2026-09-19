@@ -1,10 +1,13 @@
-//! 能力令牌：对标 1Password service account —— 给 agent / CI 用的最小权限、可吊销凭据。
+//! Capability tokens: modelled on 1Password service accounts — least-privilege, revocable
+//! credentials for agents / CI.
 //!
-//! 明文只在签发时回显一次；金库里只留 SHA-256 摘要（见 `DESIGN.md` §5）。
+//! The plaintext is echoed exactly once, at issue time; the vault keeps only its SHA-256
+//! digest (see `DESIGN.md` §5).
 //!
-//! **为什么不用 Argon2id**：令牌是 256 位均匀随机值，暴力搜索不可行，慢 KDF 在这里
-//! 没有安全收益，却会把每次 `akey run` 拖进几十毫秒。改用 SHA-256 + 常数时间比较。
-//! 同理 `TokenMeta` 不含盐字段——盐对预映像攻击无增益。
+//! **Why not Argon2id**: a token is a 256-bit uniformly random value, so brute force is
+//! infeasible and a slow KDF buys nothing here, while it would drag every `akey run` into
+//! tens of milliseconds. SHA-256 plus a constant-time comparison is used instead.
+//! Likewise `TokenMeta` carries no salt field — a salt adds nothing against preimage attacks.
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -15,24 +18,24 @@ use zeroize::Zeroizing;
 use crate::error::{Error, Result};
 use crate::vault::model::{TokenMeta, is_valid_name};
 
-/// 令牌明文前缀。便于在日志/仓库里被识别与拦截。
+/// Token plaintext prefix. Makes a token recognisable and blockable in logs/repositories.
 pub const TOKEN_PREFIX: &str = "akey_";
 
-/// 令牌明文字节长度（base64url 后 43 字符）。
+/// Token plaintext length in bytes (43 characters once base64url-encoded).
 pub const TOKEN_BYTES: usize = 32;
 
-/// `TOKEN_BYTES` 字节经 base64url（无填充）后的字符数。
+/// Character count of `TOKEN_BYTES` bytes after unpadded base64url encoding.
 ///
-/// 无填充编码长度 = `ceil(n / 3) * 4 - 填充数`，等价于 `(n * 4 + 2) / 3`。
+/// Unpadded length = `ceil(n / 3) * 4 - padding`, which equals `(n * 4 + 2) / 3`.
 const TOKEN_BODY_LEN: usize = (TOKEN_BYTES * 4).div_ceil(3);
 
 pub struct IssuedToken {
-    /// **只回显一次**，之后不可恢复。
+    /// **Echoed exactly once**; unrecoverable afterwards.
     pub plaintext: String,
     pub meta: TokenMeta,
 }
 
-/// 签发：生成随机明文，落库只存 SHA-256 摘要。
+/// Issue: generate a random plaintext and persist only its SHA-256 digest.
 pub fn issue(
     name: &str,
     allow: Option<Vec<String>>,
@@ -52,8 +55,8 @@ pub fn issue(
     }
 
     let mut buf = [0u8; TOKEN_BYTES];
-    // `rand::fill` 只在底层 RNG 报错时 panic，而线程局部 `ThreadRng` 的
-    // `TryRng::Error = Infallible`（rand 0.10），故此处不可能 panic。
+    // `rand::fill` panics only when the underlying RNG fails, and the thread-local
+    // `ThreadRng` has `TryRng::Error = Infallible` (rand 0.10), so this cannot panic.
     rand::fill(&mut buf);
     let body = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
 
@@ -75,9 +78,9 @@ pub fn issue(
     })
 }
 
-/// 校验候选明文是否匹配该令牌。必须常数时间比较。
+/// Verify that a candidate plaintext matches this token. Must compare in constant time.
 ///
-/// 不匹配 → `locked`（退出码 4）。
+/// Mismatch → `locked` (exit code 4).
 pub fn verify(candidate: &str, meta: &TokenMeta) -> Result<()> {
     let body = normalize(candidate)?;
     let digest = hash_token(&body);
@@ -89,9 +92,9 @@ pub fn verify(candidate: &str, meta: &TokenMeta) -> Result<()> {
     }
 }
 
-/// 校验令牌当前是否有权访问某条目。
+/// Authorize the token for access to one entry.
 ///
-/// 已吊销 / 已过期 → `locked`（4）；不在 `allow` 列表 → `token_scope`（8）。
+/// Revoked / expired → `locked` (4); not in the `allow` list → `token_scope` (8).
 pub fn authorize(meta: &TokenMeta, entry_name: &str, now: DateTime<Utc>) -> Result<()> {
     if meta.revoked_at.is_some() {
         return Err(Error::Locked(format!("令牌 `{}` 已吊销", meta.name)));
@@ -108,9 +111,10 @@ pub fn authorize(meta: &TokenMeta, entry_name: &str, now: DateTime<Utc>) -> Resu
     Ok(())
 }
 
-/// 从环境变量或 `--token` 中剥掉前缀。形式不符 → `usage`。
+/// Strip the prefix from an env var or `--token` value. Malformed → `usage`.
 ///
-/// 返回**规范串**：不带前缀的 base64url 令牌体。哈希与比较都基于它。
+/// Returns the **canonical string**: the base64url token body without its prefix.
+/// Both hashing and comparison are based on it.
 pub fn normalize(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     let body = trimmed.strip_prefix(TOKEN_PREFIX).unwrap_or(trimmed);
@@ -122,7 +126,7 @@ pub fn normalize(raw: &str) -> Result<String> {
     Ok(body.to_string())
 }
 
-/// 令牌体是否为 `TOKEN_BYTES` 字节 base64url 编码后的一个合法串。
+/// Whether `body` is a valid base64url encoding of `TOKEN_BYTES` bytes.
 fn is_token_body(body: &str) -> bool {
     body.len() == TOKEN_BODY_LEN
         && body
@@ -130,7 +134,8 @@ fn is_token_body(body: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// `base64(sha256(token_body))`。摘要本身不是秘密，但仍用 `Zeroizing` 收口。
+/// `base64(sha256(token_body))`. The digest is not itself a secret, but it is still
+/// wrapped in `Zeroizing`.
 fn hash_token(body: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(body.as_bytes());
@@ -149,7 +154,8 @@ mod tests {
         issue(name, None, false, None, now()).expect("valid name should issue")
     }
 
-    /// `IssuedToken` 故意不实现 `Debug`（内含明文），故手工展开 `Result`。
+    /// `IssuedToken` deliberately does not implement `Debug` (it holds plaintext), so
+    /// unwrap the `Result` by hand.
     fn issue_err(name: &str, allow: Option<Vec<String>>) -> Error {
         match issue(name, allow, false, None, now()) {
             Err(err) => err,
@@ -157,7 +163,8 @@ mod tests {
         }
     }
 
-    /// 把令牌体中间某一位换成另一个**仍在 base64url 字母表内**的字符。
+    /// Replace the middle character of the token body with another one **still inside the
+    /// base64url alphabet**.
     fn mutate(token: &str) -> String {
         let mut chars: Vec<char> = token.chars().collect();
         let at = chars.len() / 2;
@@ -170,7 +177,7 @@ mod tests {
         let issued = issue_named("ci");
         verify(&issued.plaintext, &issued.meta).expect("fresh token should verify");
 
-        // 带前缀与不带前缀是同一个令牌。
+        // Prefixed and unprefixed forms are the same token.
         let body = issued.plaintext.strip_prefix(TOKEN_PREFIX).expect("prefix");
         verify(body, &issued.meta).expect("unprefixed form should verify");
 
@@ -184,7 +191,7 @@ mod tests {
     #[test]
     fn malformed_token_is_a_usage_error() {
         let issued = issue_named("ci");
-        // 形状不对（空 / 过短 / 过长 / 非 base64url 字符）→ usage。
+        // Wrong shape (empty / too short / too long / non-base64url character) → usage.
         for bad in [
             "",
             "akey_",
@@ -224,7 +231,7 @@ mod tests {
         assert_ne!(a.plaintext, b.plaintext);
         assert_ne!(a.meta.hash.as_str(), b.meta.hash.as_str());
         assert_ne!(a.meta.id, b.meta.id);
-        // 互不通用。
+        // Not interchangeable.
         assert!(verify(&a.plaintext, &b.meta).is_err());
         assert!(verify(&b.plaintext, &a.meta).is_err());
     }
@@ -241,7 +248,7 @@ mod tests {
         assert!(matches!(err, Error::Usage(_)), "got {err:?}");
         assert_eq!(err.exit_code(), 2);
 
-        // 合法的 allow 原样保留。
+        // A valid `allow` list is preserved as-is.
         let issued =
             issue("ci", Some(vec!["openai".into()]), true, None, now()).expect("valid allow");
         assert_eq!(issued.meta.allow.as_deref(), Some(&["openai".to_string()][..]));
@@ -294,7 +301,8 @@ mod tests {
         assert!(matches!(err, Error::Locked(_)), "got {err:?}");
         assert_eq!(err.exit_code(), 4);
 
-        // 吊销优先于作用域判定：即便条目在 allow 里也必须拒绝。
+        // Revocation outranks the scope check: the entry must be refused even when it is
+        // in `allow`.
         let mut revoked_scoped = issue("ci", Some(vec!["openai".into()]), false, None, t0)
             .expect("valid allow");
         revoked_scoped.meta.revoked_at = Some(t0);
@@ -314,7 +322,7 @@ mod tests {
         assert_eq!(with, without);
         assert_eq!(with, body);
         assert_eq!(with.len(), TOKEN_BODY_LEN);
-        // 空白（shell/env 常有的换行）不应影响解析。
+        // Whitespace (the trailing newline shells/env often add) must not affect parsing.
         assert_eq!(normalize(&format!("  {}\n", issued.plaintext)).expect("padded"), with);
 
         for bad in ["", "   ", TOKEN_PREFIX, "akey_", "too-short", &"x".repeat(44)] {
