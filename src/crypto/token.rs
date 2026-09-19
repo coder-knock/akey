@@ -236,15 +236,25 @@ mod tests {
 
         assert!(!issued.meta.hash.contains(body), "hash leaks token body");
         assert_ne!(issued.meta.hash.as_str(), body);
-        assert_eq!(issued.meta.hash.len(), 43, "sha256 → 32 bytes → 43 b64 chars");
+        assert_eq!(
+            issued.meta.hash.len(),
+            43,
+            "sha256 → 32 bytes → 43 b64 chars"
+        );
 
         let debug = format!("{:?}", issued.meta);
         assert!(!debug.contains(body), "Debug leaks token body: {debug}");
         assert!(!debug.contains(&issued.plaintext), "Debug leaks plaintext");
 
         let json = serde_json::to_string(&issued.meta).expect("TokenMeta is serialisable");
-        assert!(!json.contains(body), "serde output leaks token body: {json}");
-        assert!(!json.contains(&issued.plaintext), "serde output leaks plaintext");
+        assert!(
+            !json.contains(body),
+            "serde output leaks token body: {json}"
+        );
+        assert!(
+            !json.contains(&issued.plaintext),
+            "serde output leaks plaintext"
+        );
     }
 
     #[test]
@@ -274,7 +284,10 @@ mod tests {
         // A valid `allow` list is preserved as-is.
         let issued =
             issue("ci", Some(vec!["openai".into()]), true, None, now()).expect("valid allow");
-        assert_eq!(issued.meta.allow.as_deref(), Some(&["openai".to_string()][..]));
+        assert_eq!(
+            issued.meta.allow.as_deref(),
+            Some(&["openai".to_string()][..])
+        );
         assert!(issued.meta.deny_reveal);
         assert_eq!(issued.meta.created_at, now());
         assert!(issued.meta.revoked_at.is_none());
@@ -311,8 +324,14 @@ mod tests {
         assert!(matches!(err, Error::Locked(_)), "got {err:?}");
         assert_eq!(err.exit_code(), 4);
 
-        let future = issue("ci", None, false, Some(t0 + chrono::Duration::seconds(1)), t0)
-            .expect("valid expiry");
+        let future = issue(
+            "ci",
+            None,
+            false,
+            Some(t0 + chrono::Duration::seconds(1)),
+            t0,
+        )
+        .expect("valid expiry");
         authorize(&future.meta, "openai", t0).expect("not expired yet");
         let err = authorize(&future.meta, "openai", t0 + chrono::Duration::seconds(1))
             .expect_err("expired at the boundary");
@@ -326,8 +345,8 @@ mod tests {
 
         // Revocation outranks the scope check: the entry must be refused even when it is
         // in `allow`.
-        let mut revoked_scoped = issue("ci", Some(vec!["openai".into()]), false, None, t0)
-            .expect("valid allow");
+        let mut revoked_scoped =
+            issue("ci", Some(vec!["openai".into()]), false, None, t0).expect("valid allow");
         revoked_scoped.meta.revoked_at = Some(t0);
         assert!(matches!(
             authorize(&revoked_scoped.meta, "openai", t0),
@@ -346,9 +365,19 @@ mod tests {
         assert_eq!(with, body);
         assert_eq!(with.len(), TOKEN_BODY_LEN);
         // Whitespace (the trailing newline shells/env often add) must not affect parsing.
-        assert_eq!(normalize(&format!("  {}\n", issued.plaintext)).expect("padded"), with);
+        assert_eq!(
+            normalize(&format!("  {}\n", issued.plaintext)).expect("padded"),
+            with
+        );
 
-        for bad in ["", "   ", TOKEN_PREFIX, "akey_", "too-short", &"x".repeat(44)] {
+        for bad in [
+            "",
+            "   ",
+            TOKEN_PREFIX,
+            "akey_",
+            "too-short",
+            &"x".repeat(44),
+        ] {
             let err = normalize(bad).expect_err("malformed token must be usage error");
             assert!(matches!(err, Error::Usage(_)), "{bad:?} gave {err:?}");
             assert_eq!(err.exit_code(), 2);
@@ -360,6 +389,9 @@ mod tests {
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; TOKEN_BYTES]);
         assert_eq!(encoded.len(), TOKEN_BODY_LEN);
         assert!(is_token_body(&encoded));
-        assert!(!is_token_body(&format!("{encoded}=")), "padding must be rejected");
+        assert!(
+            !is_token_body(&format!("{encoded}=")),
+            "padding must be rejected"
+        );
     }
 }

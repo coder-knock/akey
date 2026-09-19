@@ -28,7 +28,7 @@ use crate::inject::run as inject;
 use crate::paths::{self, FILE_MODE};
 use crate::reference::{self, Attribute, Reference};
 use crate::vault::model::{
-    DEFAULT_VAULT, Category, Entry, Field, FieldType, Vault, is_valid_name, slug,
+    Category, DEFAULT_VAULT, Entry, Field, FieldType, Vault, is_valid_name, slug,
 };
 
 // ---------------------------------------------------------------------------
@@ -495,11 +495,9 @@ pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
         None => ("stdin".to_string(), read_stdin()?),
     };
     let incoming = match args.encoding {
-        ExportFormat::Dotenv => parse_import_dotenv(
-            &import_entry_name(args.in_file.as_deref()),
-            &source,
-            &text,
-        )?,
+        ExportFormat::Dotenv => {
+            parse_import_dotenv(&import_entry_name(args.in_file.as_deref()), &source, &text)?
+        }
         other => parse_import(other, &source, &text)?,
     };
     // Name and ID conflicts are rejected before anything hits disk, so a failure cannot leave a half-written result.
@@ -579,13 +577,14 @@ fn parse_import(format: ExportFormat, label: &str, text: &str) -> Result<Vec<Ent
 }
 
 fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
-    let mut value: Value = serde_json::from_str(text)
-        .map_err(|e| Error::usage(crate::msg!(
+    let mut value: Value = serde_json::from_str(text).map_err(|e| {
+        Error::usage(crate::msg!(
             "{}: not valid JSON: {}",
             "{}：不是合法的 JSON：{}",
             label,
             e
-        )))?;
+        ))
+    })?;
 
     if value.is_array() {
         if let Some(items) = value.as_array_mut() {
@@ -593,13 +592,14 @@ fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
                 fill_entry_defaults(item);
             }
         }
-        return serde_json::from_value(value)
-            .map_err(|e| Error::usage(crate::msg!(
+        return serde_json::from_value(value).map_err(|e| {
+            Error::usage(crate::msg!(
                 "{}: not a list of entries: {}",
                 "{}：不是条目列表：{}",
                 label,
                 e
-            )));
+            ))
+        });
     }
 
     let has_entries = match value.get_mut("entries").and_then(Value::as_object_mut) {
@@ -612,13 +612,14 @@ fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
         None => false,
     };
     if has_entries {
-        let vault: Vault = serde_json::from_value(value)
-            .map_err(|e| Error::usage(crate::msg!(
+        let vault: Vault = serde_json::from_value(value).map_err(|e| {
+            Error::usage(crate::msg!(
                 "{}: not a vault document: {}",
                 "{}：不是金库文档：{}",
                 label,
                 e
-            )))?;
+            ))
+        })?;
         return Ok(vault.entries.into_values().collect());
     }
 
@@ -720,12 +721,13 @@ fn parse_import_csv(label: &str, text: &str) -> Result<Vec<Entry>> {
             .iter()
             .position(|h| h.trim().eq_ignore_ascii_case(want))
     };
-    let title_col = column("title")
-        .ok_or_else(|| Error::usage(crate::msg!(
+    let title_col = column("title").ok_or_else(|| {
+        Error::usage(crate::msg!(
             "{}: 1Password CSV needs a Title column",
             "{}：1Password CSV 需要 Title 列",
             label
-        )))?;
+        ))
+    })?;
     let username_col = column("username");
     let password_col = column("password");
     let url_col = column("url");
@@ -1044,14 +1046,13 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
     }
 
     store.update(|vault| {
-        let entry = vault
-            .entries
-            .get_mut(&id)
-            .ok_or_else(|| Error::not_found(crate::msg!(
+        let entry = vault.entries.get_mut(&id).ok_or_else(|| {
+            Error::not_found(crate::msg!(
                 "no entry named '{}'",
                 "没有名为 '{}' 的条目",
                 name
-            )))?;
+            ))
+        })?;
         match entry.field_mut(label) {
             Some(existing) => {
                 existing.ty = FieldType::File;
@@ -1105,7 +1106,10 @@ fn decode_attachment(encoded: &str) -> Result<Vec<u8>> {
         .decode(trimmed)
         .or_else(|_| URL_SAFE_NO_PAD.decode(trimmed))
         .map_err(|_| {
-            Error::corrupt(crate::msg!("attachment is not valid base64", "附件不是合法的 base64"))
+            Error::corrupt(crate::msg!(
+                "attachment is not valid base64",
+                "附件不是合法的 base64"
+            ))
         })
 }
 
@@ -1210,7 +1214,11 @@ fn handle_message(vault: Option<&Vault>, message: &Value) -> Option<Value> {
         "tools/list" => respond(json!({ "tools": tool_definitions() })),
         "tools/call" => handle_tool_call(vault, id, object.get("params")),
         other => id.map(|id| {
-            error_response(id, ERR_METHOD_NOT_FOUND, &format!("method '{other}' not found"))
+            error_response(
+                id,
+                ERR_METHOD_NOT_FOUND,
+                &format!("method '{other}' not found"),
+            )
         }),
     }
 }
@@ -1239,7 +1247,10 @@ fn handle_tool_call(
         .unwrap_or_else(|| json!({}));
 
     match name {
-        "akey_list" => Some(result_response(id, tool_text(&list_payload(vault, &arguments)))),
+        "akey_list" => Some(result_response(
+            id,
+            tool_text(&list_payload(vault, &arguments)),
+        )),
         "akey_get" => {
             let Some(item) = arguments.get("item").and_then(Value::as_str) else {
                 return Some(error_response(
@@ -1433,8 +1444,8 @@ mod tests {
     use super::*;
     use crate::cli::Cli;
     use crate::config::Config;
-    use crate::crypto::token;
     use crate::crypto::DeviceIdentity;
+    use crate::crypto::token;
     use crate::paths::Paths;
     use crate::vault::model::Reveal;
     use crate::vault::recipients::{RecipientKind, Recipients};
@@ -1468,7 +1479,9 @@ mod tests {
         paths.ensure().expect("create home");
 
         let identity = DeviceIdentity::generate("test-device");
-        identity.save(&paths.identity).expect("write the local identity");
+        identity
+            .save(&paths.identity)
+            .expect("write the local identity");
         let config = Config {
             repo: repo.clone(),
             remote: None,
@@ -1494,18 +1507,22 @@ mod tests {
         let mut vault = Vault::default();
 
         let mut openai = Entry::new(ulid(1), "openai".to_string(), Category::Apikey, now);
-        openai
-            .fields
-            .push(Field::new("credential", FieldType::Concealed, SENTINEL.to_string()));
+        openai.fields.push(Field::new(
+            "credential",
+            FieldType::Concealed,
+            SENTINEL.to_string(),
+        ));
         openai.url = Some("https://platform.openai.com".to_string());
         vault.entries.insert(openai.id, openai);
 
         let mut other = Entry::new(ulid(2), "other".to_string(), Category::Login, now);
         other.title = Some("Other, Inc.".to_string());
         other.url = Some("https://example.com/login".to_string());
-        other
-            .fields
-            .push(Field::new("username", FieldType::String, "me@example.com".to_string()));
+        other.fields.push(Field::new(
+            "username",
+            FieldType::String,
+            "me@example.com".to_string(),
+        ));
         other.fields.push(Field::new(
             "password",
             FieldType::Concealed,
@@ -1559,12 +1576,15 @@ mod tests {
     }
 
     fn entry_with(name: &str, fields: &[(&str, &str)]) -> Entry {
-        let mut entry = Entry::new(Ulid::generate(), name.to_string(), Category::Apikey, Utc::now());
+        let mut entry = Entry::new(
+            Ulid::generate(),
+            name.to_string(),
+            Category::Apikey,
+            Utc::now(),
+        );
         entry.fields = fields
             .iter()
-            .map(|(label, value)| {
-                Field::new(label, FieldType::Concealed, (*value).to_string())
-            })
+            .map(|(label, value)| Field::new(label, FieldType::Concealed, (*value).to_string()))
             .collect();
         entry
     }
@@ -1605,7 +1625,10 @@ mod tests {
         let log = std::fs::read_to_string(&fx.store.paths.audit).expect("audit log");
         assert!(log.contains("\"read\""), "{log}");
         assert!(log.contains("openai"), "{log}");
-        assert!(!log.contains(SENTINEL), "the audit log must not contain plaintext: {log}");
+        assert!(
+            !log.contains(SENTINEL),
+            "the audit log must not contain plaintext: {log}"
+        );
     }
 
     #[test]
@@ -1651,13 +1674,20 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
         assert_eq!(err.code(), "usage");
         assert!(err.to_string().contains("--yes"), "{err}");
-        assert!(!out.exists(), "nothing may be written to disk without --yes");
+        assert!(
+            !out.exists(),
+            "nothing may be written to disk without --yes"
+        );
 
         // Only with --yes does it touch the vault: use an uninitialized home to show the gate runs before the read.
         let empty = tempfile::tempdir().expect("temporary directory");
         let err = export(&ctx_with(&empty.path().join("akey"), &["--yes"]), &args)
             .expect_err("not initialized");
-        assert_eq!(err.exit_code(), 4, "only after the gate passes does 'not initialized' come up");
+        assert_eq!(
+            err.exit_code(),
+            4,
+            "only after the gate passes does 'not initialized' come up"
+        );
     }
 
     #[test]
@@ -1700,7 +1730,10 @@ mod tests {
         .expect("export");
         let text = std::fs::read_to_string(&scoped).expect("read back");
         assert!(text.contains("OTHER_PASSWORD"), "{text}");
-        assert!(!text.contains("OPENAI"), "entries outside the scope must not be exported: {text}");
+        assert!(
+            !text.contains("OPENAI"),
+            "entries outside the scope must not be exported: {text}"
+        );
         assert!(!text.contains(SENTINEL), "{text}");
 
         let export_audit = std::fs::read_to_string(&fx.store.paths.audit).expect("audit");
@@ -1719,7 +1752,10 @@ mod tests {
         .expect_err("a deny_reveal token must not export plaintext");
         assert_eq!(err.exit_code(), 7, "{err}");
         assert!(matches!(err, Error::Denied(_)), "{err:?}");
-        assert!(!denied.exists(), "nothing may be written to disk when denied");
+        assert!(
+            !denied.exists(),
+            "nothing may be written to disk when denied"
+        );
     }
 
     // ---- run: token scope (regression of this fix) --------
@@ -1741,9 +1777,13 @@ mod tests {
                 no_masking: false,
                 command: sh_write(&marker, "X"),
             };
-            let err = run(&ctx, &args).expect_err("a restricted token must not inject entries outside its scope");
+            let err = run(&ctx, &args)
+                .expect_err("a restricted token must not inject entries outside its scope");
             assert_eq!(err.exit_code(), 8, "spec '{spec}': {err}");
-            assert!(matches!(err, Error::TokenScope(_)), "spec '{spec}': {err:?}");
+            assert!(
+                matches!(err, Error::TokenScope(_)),
+                "spec '{spec}': {err:?}"
+            );
             assert!(
                 !marker.exists(),
                 "spec '{spec}': when authorization fails the child must not run, let alone write out plaintext"
@@ -1768,7 +1808,8 @@ mod tests {
             no_masking: false,
             command: sh_write(&marker, "X"),
         };
-        let err = run(&ctx, &args).expect_err("a reference in an env file is subject to the scope just the same");
+        let err = run(&ctx, &args)
+            .expect_err("a reference in an env file is subject to the scope just the same");
         assert_eq!(err.exit_code(), 8, "{err}");
         assert!(!marker.exists());
     }
@@ -1812,9 +1853,13 @@ mod tests {
         };
 
         std::fs::write(&template, "key=akey://openai/credential\n").expect("write the template");
-        let err = inject(&ctx, &args).expect_err("a restricted token must not render entries outside its scope");
+        let err = inject(&ctx, &args)
+            .expect_err("a restricted token must not render entries outside its scope");
         assert_eq!(err.exit_code(), 8, "{err}");
-        assert!(!out.exists(), "nothing may be written to disk when authorization fails");
+        assert!(
+            !out.exists(),
+            "nothing may be written to disk when authorization fails"
+        );
 
         std::fs::write(&template, "key=akey://other/password\n").expect("write the template");
         inject(&ctx, &args).expect("references inside the scope should render");
@@ -1857,7 +1902,11 @@ mod tests {
             },
         )
         .expect("get");
-        assert_eq!(std::fs::read(&back).expect("read back"), payload, "must round-trip byte for byte");
+        assert_eq!(
+            std::fs::read(&back).expect("read back"),
+            payload,
+            "must round-trip byte for byte"
+        );
 
         // A non-file field should go through `read`, not doc
         let err = doc(
@@ -1941,8 +1990,12 @@ mod tests {
     fn import_plan_rejects_duplicates_and_merges_fields() {
         let fx = fixture(Vec::new());
 
-        let err = plan_import(&fx.vault, vec![entry_with("openai", &[("credential", "v")])], false)
-            .expect_err("a duplicate name and no --merge");
+        let err = plan_import(
+            &fx.vault,
+            vec![entry_with("openai", &[("credential", "v")])],
+            false,
+        )
+        .expect_err("a duplicate name and no --merge");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("--merge"), "{err}");
 
@@ -1983,20 +2036,29 @@ mod tests {
         );
 
         // A new name → create; the same name twice → usage
-        let plan = plan_import(&fx.vault, vec![entry_with("fresh", &[("credential", "v")])], false)
-            .expect("the create plan");
+        let plan = plan_import(
+            &fx.vault,
+            vec![entry_with("fresh", &[("credential", "v")])],
+            false,
+        )
+        .expect("the create plan");
         assert_eq!(plan.creates.len(), 1);
 
         let twice = vec![
             entry_with("dup", &[("a", "1")]),
             entry_with("dup", &[("a", "2")]),
         ];
-        let err = plan_import(&fx.vault, twice, true).expect_err("a duplicate name within one file");
+        let err =
+            plan_import(&fx.vault, twice, true).expect_err("a duplicate name within one file");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("twice"), "{err}");
 
-        let err = plan_import(&fx.vault, vec![entry_with("Bad Name", &[("a", "1")])], false)
-            .expect_err("an invalid entry name");
+        let err = plan_import(
+            &fx.vault,
+            vec![entry_with("Bad Name", &[("a", "1")])],
+            false,
+        )
+        .expect_err("an invalid entry name");
         assert_eq!(err.exit_code(), 2);
     }
 
@@ -2017,10 +2079,7 @@ mod tests {
         let vault = fx.store.load().expect("reload");
         let entry = vault.find("prod").expect("prod");
         assert_eq!(entry.category, Category::EnvBundle);
-        assert_eq!(
-            entry.field("aws_key").expect("aws_key").value(),
-            "abc123"
-        );
+        assert_eq!(entry.field("aws_key").expect("aws_key").value(), "abc123");
 
         let err = import(&ctx, &args(false)).expect_err("a duplicate name and no --merge");
         assert_eq!(err.exit_code(), 2);
@@ -2029,7 +2088,12 @@ mod tests {
         import(&ctx, &args(true)).expect("--merge should make the import repeatable");
         let vault = fx.store.load().expect("reload");
         assert_eq!(
-            vault.find("prod").expect("prod").field("aws_key").expect("aws_key").value(),
+            vault
+                .find("prod")
+                .expect("prod")
+                .field("aws_key")
+                .expect("aws_key")
+                .value(),
             "rotated"
         );
 
@@ -2049,19 +2113,17 @@ mod tests {
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].name, "prod");
         assert_eq!(imported[0].category, Category::EnvBundle);
-        assert_eq!(imported[0].fields.len(), 2, "duplicate and empty variables must both be handled cleanly");
+        assert_eq!(
+            imported[0].fields.len(),
+            2,
+            "duplicate and empty variables must both be handled cleanly"
+        );
 
         // import → inject: the variable names must match exactly what the `.env` file said.
         let mut vault = Vault::default();
         vault.entries.insert(imported[0].id, imported[0].clone());
-        let injection = inject::resolve(
-            &fx.store,
-            &vault,
-            &[],
-            &["prod".to_string()],
-            &[],
-        )
-        .expect("bundle injection");
+        let injection = inject::resolve(&fx.store, &vault, &[], &["prod".to_string()], &[])
+            .expect("bundle injection");
         let vars: BTreeMap<&str, &str> = injection
             .vars
             .iter()
@@ -2071,11 +2133,15 @@ mod tests {
         assert_eq!(vars["DB_URL"], "postgres://u:p@h/db");
 
         // An empty file → usage, rather than creating an empty entry
-        let err = parse_import_dotenv("prod", ".env", "# comment only\n").expect_err("no variables");
+        let err =
+            parse_import_dotenv("prod", ".env", "# comment only\n").expect_err("no variables");
         assert_eq!(err.exit_code(), 2);
 
         assert_eq!(import_entry_name(Some(Path::new("/tmp/prod.env"))), "prod");
-        assert_eq!(import_entry_name(Some(Path::new("/tmp/.env"))), "imported-env");
+        assert_eq!(
+            import_entry_name(Some(Path::new("/tmp/.env"))),
+            "imported-env"
+        );
         assert_eq!(import_entry_name(None), "imported-env");
     }
 
@@ -2096,9 +2162,13 @@ mod tests {
         let entries = parse_import(ExportFormat::Json, "bare.json", bare).expect("parse");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "solo");
-        assert_eq!(entries[0].field("credential").expect("credential").value(), "v");
+        assert_eq!(
+            entries[0].field("credential").expect("credential").value(),
+            "v"
+        );
 
-        let err = parse_import(ExportFormat::Json, "x.json", "{\"hello\":1}").expect_err("not recognizable");
+        let err = parse_import(ExportFormat::Json, "x.json", "{\"hello\":1}")
+            .expect_err("not recognizable");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("list of entries"), "{err}");
     }
@@ -2107,15 +2177,25 @@ mod tests {
     fn import_csv1p_round_trips_our_own_export() {
         let fx = fixture(Vec::new());
         let text = render_export(&fx.vault, ExportFormat::Csv1p, None).expect("export");
-        assert!(text.starts_with("Title,Username,Password,URL,Notes\n"), "{text}");
-        assert!(text.contains("\"Other, Inc.\""), "a title containing a comma needs quotes: {text}");
+        assert!(
+            text.starts_with("Title,Username,Password,URL,Notes\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\"Other, Inc.\""),
+            "a title containing a comma needs quotes: {text}"
+        );
 
         let entries = parse_import(ExportFormat::Csv1p, "1p.csv", &text).expect("parse");
         let other = entries
             .iter()
             .find(|e| e.title.as_deref() == Some("Other, Inc."))
             .expect("the other entry");
-        assert!(is_valid_name(&other.name), "the derived name must be valid: {}", other.name);
+        assert!(
+            is_valid_name(&other.name),
+            "the derived name must be valid: {}",
+            other.name
+        );
         assert_eq!(
             other.field("username").expect("username").value(),
             "me@example.com"
@@ -2140,9 +2220,11 @@ mod tests {
             FieldType::Concealed,
             "has space and \"quotes\"".to_string(),
         ));
-        entry
-            .fields
-            .push(Field::new("plain", FieldType::String, "plain-value".to_string()));
+        entry.fields.push(Field::new(
+            "plain",
+            FieldType::String,
+            "plain-value".to_string(),
+        ));
         let mut vault = Vault::default();
         vault.entries.insert(entry.id, entry);
 
@@ -2181,8 +2263,11 @@ mod tests {
         assert!(init["result"]["serverInfo"]["version"].is_string());
 
         // The client gave no version → fall back to the default rather than crashing
-        let init = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":2,"method":"initialize"}))
-            .expect("initialize must reply");
+        let init = handle_message(
+            Some(vault),
+            &json!({"jsonrpc":"2.0","id":2,"method":"initialize"}),
+        )
+        .expect("initialize must reply");
         assert!(init["result"]["protocolVersion"].is_string());
         assert!(init["result"]["capabilities"]["tools"].is_object());
 
@@ -2196,12 +2281,18 @@ mod tests {
             "a notification must get no reply"
         );
 
-        let pong = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":3,"method":"ping"}))
-            .expect("ping must reply");
+        let pong = handle_message(
+            Some(vault),
+            &json!({"jsonrpc":"2.0","id":3,"method":"ping"}),
+        )
+        .expect("ping must reply");
         assert!(pong["result"].is_object());
 
-        let tools = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}))
-            .expect("tools/list must reply");
+        let tools = handle_message(
+            Some(vault),
+            &json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}),
+        )
+        .expect("tools/list must reply");
         let listed = tools["result"]["tools"].as_array().expect("tool array");
         let names: Vec<&str> = listed.iter().filter_map(|t| t["name"].as_str()).collect();
         assert_eq!(names, vec!["akey_list", "akey_get"]);
@@ -2219,8 +2310,11 @@ mod tests {
         assert!(listed["result"]["tools"].is_array());
 
         // Unknown method → -32601; non-object request → -32600
-        let err = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":7,"method":"tools/whatever"}))
-            .expect("must reply with an error");
+        let err = handle_message(
+            Some(vault),
+            &json!({"jsonrpc":"2.0","id":7,"method":"tools/whatever"}),
+        )
+        .expect("must reply with an error");
         assert_eq!(err["error"]["code"], -32601);
         let err = handle_message(Some(vault), &json!("nope")).expect("must reply with an error");
         assert_eq!(err["error"]["code"], -32600);
@@ -2265,9 +2359,12 @@ mod tests {
             &json!({"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"akey_get","arguments":{"item":"openai"}}}),
         )
         .expect("must reply");
-        let payload: Value =
-            serde_json::from_str(get["result"]["content"][0]["text"].as_str().expect("the text"))
-                .expect("the body is JSON");
+        let payload: Value = serde_json::from_str(
+            get["result"]["content"][0]["text"]
+                .as_str()
+                .expect("the text"),
+        )
+        .expect("the body is JSON");
         assert_eq!(payload["entry"]["name"], "openai");
         assert_eq!(payload["entry"]["category"], "apikey");
         assert_eq!(payload["fields"][0]["label"], "credential");

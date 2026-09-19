@@ -123,15 +123,13 @@ impl Vault {
 
     pub fn find_token(&self, name: &str) -> Result<&TokenMeta> {
         let mut hits = self.tokens.values().filter(|t| t.name == name);
-        let first = hits
-            .next()
-            .ok_or_else(|| {
-                Error::not_found(crate::msg!(
-                    "no token named '{}'",
-                    "没有名为 '{}' 的令牌",
-                    name
-                ))
-            })?;
+        let first = hits.next().ok_or_else(|| {
+            Error::not_found(crate::msg!(
+                "no token named '{}'",
+                "没有名为 '{}' 的令牌",
+                name
+            ))
+        })?;
         if hits.next().is_some() {
             return Err(Error::Ambiguous(crate::msg!(
                 "multiple tokens named '{}'",
@@ -333,11 +331,7 @@ impl Category {
         use FieldType::*;
         match self {
             Category::Apikey => &[("credential", Concealed), ("url", Url)],
-            Category::Login => &[
-                ("username", String),
-                ("password", Concealed),
-                ("url", Url),
-            ],
+            Category::Login => &[("username", String), ("password", Concealed), ("url", Url)],
             Category::Token => &[("token", Concealed), ("scopes", String)],
             Category::Database => &[
                 ("host", String),
@@ -528,7 +522,10 @@ mod tests {
     fn field_debug_never_leaks_value() {
         let f = Field::new("password", FieldType::Concealed, "hunter2".into());
         let rendered = format!("{f:?}");
-        assert!(!rendered.contains("hunter2"), "concealed value leaked: {rendered}");
+        assert!(
+            !rendered.contains("hunter2"),
+            "concealed value leaked: {rendered}"
+        );
         assert!(rendered.contains(crate::output::REDACTED));
     }
 

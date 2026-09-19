@@ -271,7 +271,12 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].to_string(), live);
 
-        recipients.add("age1not-a-real-key", "bogus", RecipientKind::Bootstrap, at(2));
+        recipients.add(
+            "age1not-a-real-key",
+            "bogus",
+            RecipientKind::Bootstrap,
+            at(2),
+        );
         let err = recipients
             .to_recipients()
             .expect_err("invalid pubkey must fail");

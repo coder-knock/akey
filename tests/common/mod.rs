@@ -103,10 +103,7 @@ impl Device {
     /// Writes an entry, with the secret value going through stdin (to keep it out of argv).
     pub fn set_secret(&self, name: &str, field: &str, value: &str) {
         let payload = format!("{field}={value}\n");
-        let out = self.run_with_stdin(
-            &["set", name, "--category", "apikey", "--stdin"],
-            &payload,
-        );
+        let out = self.run_with_stdin(&["set", name, "--category", "apikey", "--stdin"], &payload);
         assert!(
             out.status.success(),
             "set {name} failed: {}",
@@ -127,8 +124,8 @@ impl Device {
             args.join(" "),
             out.status.code().unwrap_or(-1)
         );
-        let parsed: serde_json::Value =
-            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("stdout is not JSON: {e}\n{stdout}"));
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("stdout is not JSON: {e}\n{stdout}"));
         assert_eq!(parsed["ok"], true, "envelope not ok: {stdout}");
         parsed["data"].clone()
     }
@@ -153,7 +150,11 @@ impl Device {
 
     pub fn stdout(&self, args: &[&str]) -> String {
         let out = self.run(args);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).to_string()
     }
 
@@ -197,7 +198,10 @@ impl Device {
 
     /// Enables the recovery passphrase (a prerequisite for bootstrapping another machine).
     pub fn enable_recovery(&self, passphrase: &str) {
-        self.run_ok_with_env(&["recovery", "set"], &[("AKEY_RECOVERY_PASSPHRASE", passphrase)]);
+        self.run_ok_with_env(
+            &["recovery", "set"],
+            &[("AKEY_RECOVERY_PASSPHRASE", passphrase)],
+        );
     }
 
     /// Bootstraps a new device from the remote.

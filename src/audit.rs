@@ -69,7 +69,8 @@ pub fn record(
 
 fn append(paths: &Paths, record: &AuditRecord) -> Result<()> {
     paths.ensure()?;
-    let mut line = serde_json::to_string(record).map_err(|e| Error::Io(std::io::Error::other(e)))?;
+    let mut line =
+        serde_json::to_string(record).map_err(|e| Error::Io(std::io::Error::other(e)))?;
     line.push('\n');
 
     let mut file =

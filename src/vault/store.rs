@@ -27,7 +27,13 @@ pub const AGENTS_FILE: &str = "AGENTS.md";
 /// repo/x.txt` is enough) — and a single `sync` writes it permanently into git history and
 /// pushes it to the remote, and git history cannot be scrubbed clean. Adding only known
 /// files keeps such a mistake local.
-pub const SYNCED_FILES: &[&str] = &[VAULT_FILE, RECIPIENTS_FILE, RECOVERY_FILE, AGENTS_FILE, ".gitignore"];
+pub const SYNCED_FILES: &[&str] = &[
+    VAULT_FILE,
+    RECIPIENTS_FILE,
+    RECOVERY_FILE,
+    AGENTS_FILE,
+    ".gitignore",
+];
 
 /// An unlocked local view: this device's identity + config + repository location.
 pub struct Store {
@@ -176,14 +182,13 @@ impl Store {
                 self.identity.name()
             ))
         })?;
-        let vault: Vault = serde_json::from_slice(&plaintext)
-            .map_err(|e| {
-                Error::Corrupt(crate::msg!(
-                    "vault decrypted but is not valid JSON: {}",
-                    "金库已解密但不是合法的 JSON：{}",
-                    e
-                ))
-            })?;
+        let vault: Vault = serde_json::from_slice(&plaintext).map_err(|e| {
+            Error::Corrupt(crate::msg!(
+                "vault decrypted but is not valid JSON: {}",
+                "金库已解密但不是合法的 JSON：{}",
+                e
+            ))
+        })?;
         if vault.version > FORMAT_VERSION {
             return Err(Error::Unsupported(crate::msg!(
                 "vault format v{} is newer than this build supports (v{}); upgrade akey",
@@ -316,8 +321,11 @@ mod tests {
     fn entry(name: &str, secret: &str) -> Entry {
         let id = ulid::Ulid::generate();
         let mut e = Entry::new(id, name.into(), Category::Apikey, Utc::now());
-        e.fields
-            .push(crate::vault::model::Field::new("credential", crate::vault::model::FieldType::Concealed, secret.into()));
+        e.fields.push(crate::vault::model::Field::new(
+            "credential",
+            crate::vault::model::FieldType::Concealed,
+            secret.into(),
+        ));
         e
     }
 
@@ -325,7 +333,9 @@ mod tests {
     fn round_trip_preserves_entries_and_hides_them_on_disk() {
         let (_guard, store) = temp_store();
         let mut vault = Vault::default();
-        vault.entries.insert(ulid::Ulid::generate(), entry("openai", "sk-canary-value"));
+        vault
+            .entries
+            .insert(ulid::Ulid::generate(), entry("openai", "sk-canary-value"));
 
         store.save(&vault).unwrap();
         let back = store.load().unwrap();
@@ -343,17 +353,20 @@ mod tests {
         let (_guard, store) = temp_store();
         store
             .update(|vault| {
-                vault.entries.insert(ulid::Ulid::generate(), entry("a", "1"));
+                vault
+                    .entries
+                    .insert(ulid::Ulid::generate(), entry("a", "1"));
                 Ok(())
             })
             .unwrap();
 
-        let id = store.update(|vault| {
-            let id = ulid::Ulid::generate();
-            vault.entries.insert(id, entry("b", "2"));
-            Ok(id)
-        })
-        .unwrap();
+        let id = store
+            .update(|vault| {
+                let id = ulid::Ulid::generate();
+                vault.entries.insert(id, entry("b", "2"));
+                Ok(id)
+            })
+            .unwrap();
 
         let back = store.load().unwrap();
         assert_eq!(back.entries.len(), 2);
@@ -424,9 +437,10 @@ mod tests {
         let (_guard, store) = temp_store();
         let mut vault = Vault::default();
         for i in 0..1000 {
-            vault
-                .entries
-                .insert(ulid::Ulid::generate(), entry(&format!("key{i}"), "value-material"));
+            vault.entries.insert(
+                ulid::Ulid::generate(),
+                entry(&format!("key{i}"), "value-material"),
+            );
         }
         store.save(&vault).unwrap();
 
@@ -439,7 +453,10 @@ mod tests {
         }
 
         let ciphertext = std::fs::metadata(store.vault_path()).unwrap().len();
-        eprintln!("vault 1000 entries: {ciphertext} bytes, worst load {:?}", worst);
+        eprintln!(
+            "vault 1000 entries: {ciphertext} bytes, worst load {:?}",
+            worst
+        );
         assert!(
             worst < std::time::Duration::from_millis(100),
             "cold read took {worst:?}, over the 100ms budget"

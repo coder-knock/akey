@@ -89,7 +89,10 @@ impl Error {
             Error::SyncFailed(_) => 6,
             Error::Denied(_) => 7,
             Error::TokenScope(_) => 8,
-            Error::Io(_) | Error::Crypto(_) | Error::Corrupt(_) | Error::Git(_)
+            Error::Io(_)
+            | Error::Crypto(_)
+            | Error::Corrupt(_)
+            | Error::Git(_)
             | Error::Unsupported(_) => 1,
         }
     }
@@ -189,11 +192,7 @@ mod tests {
             (Error::Conflict("x".into()), 5, "conflict"),
             (Error::SyncFailed("x".into()), 6, "sync_failed"),
             (Error::Denied("x".into()), 7, "denied"),
-            (
-                Error::TokenScope("x".into()),
-                8,
-                "token_scope",
-            ),
+            (Error::TokenScope("x".into()), 8, "token_scope"),
             (Error::Crypto("x".into()), 1, "crypto"),
             (Error::Corrupt("x".into()), 1, "corrupt"),
             (Error::Git("x".into()), 1, "git"),

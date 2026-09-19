@@ -195,7 +195,10 @@ mod tests {
         let byte_wise = feed_bytes(&mut drip, &input);
 
         assert_eq!(once, expected, "the one-shot result");
-        assert_eq!(byte_wise, once, "1-byte chunking must be byte-identical to the one-shot feed");
+        assert_eq!(
+            byte_wise, once,
+            "1-byte chunking must be byte-identical to the one-shot feed"
+        );
     }
 
     #[test]
@@ -207,21 +210,33 @@ mod tests {
             let mut out = masker.push(&input[..split]);
             out.extend(masker.push(&input[split..]));
             out.extend(masker.finish());
-            assert_eq!(out, expected, "the split at {split} must still be replaced in full");
+            assert_eq!(
+                out, expected,
+                "the split at {split} must still be replaced in full"
+            );
         }
     }
 
     #[test]
     fn short_values_untouched() {
         let mut masker = mk(&["true", "0", "prod", "1234567"]);
-        assert!(!masker.is_active(), "all shorter than MIN_SECRET_LEN → not active");
+        assert!(
+            !masker.is_active(),
+            "all shorter than MIN_SECRET_LEN → not active"
+        );
 
         let out = feed_all(&mut masker, b"true 0 prod 1234567");
-        assert_eq!(out, b"true 0 prod 1234567", "short values must pass through verbatim");
+        assert_eq!(
+            out, b"true 0 prod 1234567",
+            "short values must pass through verbatim"
+        );
 
         // Exactly 8 bytes turns it on.
         let mut boundary = mk(&["12345678"]);
-        assert!(boundary.is_active(), "a length equal to MIN_SECRET_LEN should activate");
+        assert!(
+            boundary.is_active(),
+            "a length equal to MIN_SECRET_LEN should activate"
+        );
         assert_eq!(feed_all(&mut boundary, b"12345678"), TAINTED.as_bytes());
     }
 
@@ -268,11 +283,21 @@ mod tests {
         let long = "ABCDEFGHIJKLMNOPQRST";
         let mut masker = mk(&[SHORT, long]);
         let held = masker.push(SHORT.as_bytes());
-        assert!(held.is_empty(), "a complete short secret should be held back, waiting on a longer candidate");
+        assert!(
+            held.is_empty(),
+            "a complete short secret should be held back, waiting on a longer candidate"
+        );
 
         let tail = masker.finish();
-        assert_eq!(tail, TAINTED.as_bytes(), "finish must flush the secret out of the buffer");
-        assert!(masker.finish().is_empty(), "finish should be idempotent and not re-emit");
+        assert_eq!(
+            tail,
+            TAINTED.as_bytes(),
+            "finish must flush the secret out of the buffer"
+        );
+        assert!(
+            masker.finish().is_empty(),
+            "finish should be idempotent and not re-emit"
+        );
 
         // At end of stream a truncated secret prefix is not a complete secret and must be emitted verbatim (data must not vanish into thin air).
         let mut truncated = mk(&[LONG]);
@@ -293,7 +318,10 @@ mod tests {
         );
 
         let mut plain = Masker::new();
-        assert_eq!(feed_all(&mut plain, b"just some output\n"), b"just some output\n");
+        assert_eq!(
+            feed_all(&mut plain, b"just some output\n"),
+            b"just some output\n"
+        );
 
         // Short values only: it passes through as well.
         let mut shorts = mk(&["true", "0"]);
@@ -311,10 +339,18 @@ mod tests {
         expected.extend_from_slice(TAINTED.as_bytes());
         expected.extend_from_slice(&[0x81, 0xc3, 0x28]);
 
-        assert_eq!(feed_all(&mut masker, &input), expected, "non-UTF-8 bytes pass through verbatim");
+        assert_eq!(
+            feed_all(&mut masker, &input),
+            expected,
+            "non-UTF-8 bytes pass through verbatim"
+        );
 
         let mut drip = mk(&[LONG]);
-        assert_eq!(feed_bytes(&mut drip, &input), expected, "the same holds byte by byte");
+        assert_eq!(
+            feed_bytes(&mut drip, &input),
+            expected,
+            "the same holds byte by byte"
+        );
     }
 
     #[test]
@@ -355,7 +391,10 @@ mod tests {
                 pos = end;
             }
             out.extend(chunked.finish());
-            assert_eq!(out, expected, "random chunking diverges from the one-shot feed on round {round}");
+            assert_eq!(
+                out, expected,
+                "random chunking diverges from the one-shot feed on round {round}"
+            );
             for secret in [A, B, C] {
                 assert!(
                     !out.windows(secret.len()).any(|w| w == secret.as_bytes()),

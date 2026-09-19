@@ -271,7 +271,8 @@ fn merge(store: &Store, git: &Git, base_rev: &str, remote_rev: &str) -> Result<M
     let base_recipients = recipients_at(git, base_rev)?;
     let theirs_recipients = recipients_at(git, remote_rev)?;
     let ours_recipients = store.load_recipients()?;
-    let merged_recipients = merge_recipients(&base_recipients, &ours_recipients, &theirs_recipients);
+    let merged_recipients =
+        merge_recipients(&base_recipients, &ours_recipients, &theirs_recipients);
 
     // Key: move HEAD onto the remote, then commit our merge result — that way the commit
     // has the remote as an ancestor and the push can fast-forward.

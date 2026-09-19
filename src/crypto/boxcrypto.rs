@@ -41,7 +41,10 @@ pub fn decrypt_with(identity: &Identity, ciphertext: &[u8]) -> Result<Vec<u8>> {
 
 /// passphrase mode (scrypt). Used only for `recovery.age`.
 pub fn encrypt_with_passphrase(passphrase: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>> {
-    seal(age::Encryptor::with_user_passphrase(passphrase.clone()), plaintext)
+    seal(
+        age::Encryptor::with_user_passphrase(passphrase.clone()),
+        plaintext,
+    )
 }
 
 /// Wrong passphrase → `locked` (exit code 4).
@@ -55,33 +58,27 @@ pub fn decrypt_with_passphrase(passphrase: &SecretString, ciphertext: &[u8]) -> 
 /// `StreamWriter::finish` must be called, otherwise what lands on disk is a truncated file.
 fn seal(encryptor: age::Encryptor, plaintext: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    let mut writer = encryptor
-        .wrap_output(&mut out)
-        .map_err(|e| {
-            Error::crypto(crate::msg!(
-                "cannot start age encryption: {}",
-                "无法启动 age 加密：{}",
-                e
-            ))
-        })?;
-    writer
-        .write_all(plaintext)
-        .map_err(|e| {
-            Error::crypto(crate::msg!(
-                "age encryption failed: {}",
-                "age 加密失败：{}",
-                e
-            ))
-        })?;
-    writer
-        .finish()
-        .map_err(|e| {
-            Error::crypto(crate::msg!(
-                "age encryption failed: {}",
-                "age 加密失败：{}",
-                e
-            ))
-        })?;
+    let mut writer = encryptor.wrap_output(&mut out).map_err(|e| {
+        Error::crypto(crate::msg!(
+            "cannot start age encryption: {}",
+            "无法启动 age 加密：{}",
+            e
+        ))
+    })?;
+    writer.write_all(plaintext).map_err(|e| {
+        Error::crypto(crate::msg!(
+            "age encryption failed: {}",
+            "age 加密失败：{}",
+            e
+        ))
+    })?;
+    writer.finish().map_err(|e| {
+        Error::crypto(crate::msg!(
+            "age encryption failed: {}",
+            "age 加密失败：{}",
+            e
+        ))
+    })?;
     Ok(out)
 }
 
@@ -91,9 +88,7 @@ fn open<'a>(
     identities: impl Iterator<Item = &'a dyn age::Identity>,
 ) -> Result<Vec<u8>> {
     let decryptor = age::Decryptor::new(ciphertext).map_err(|e| cannot_open(&e))?;
-    let mut reader = decryptor
-        .decrypt(identities)
-        .map_err(|e| cannot_open(&e))?;
+    let mut reader = decryptor.decrypt(identities).map_err(|e| cannot_open(&e))?;
 
     let mut plaintext = Vec::new();
     reader
@@ -157,9 +152,11 @@ mod tests {
     #[test]
     fn truncated_ciphertext_is_locked_not_panicking() {
         let alice = Identity::generate();
-        let mut ciphertext =
-            encrypt_to(&[alice.to_public()], b"a payload long enough to leave a real stream")
-                .unwrap();
+        let mut ciphertext = encrypt_to(
+            &[alice.to_public()],
+            b"a payload long enough to leave a real stream",
+        )
+        .unwrap();
         let dropped = ciphertext.split_off(ciphertext.len() - 20);
         assert_eq!(dropped.len(), 20);
 

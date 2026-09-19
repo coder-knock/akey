@@ -40,8 +40,7 @@ impl Injection {
 
     /// The plaintext list for the masking pipeline: the final values plus the substituted single values.
     pub fn secrets(&self) -> Vec<String> {
-        let mut all: BTreeSet<String> =
-            self.vars.iter().map(|(_, v)| v.to_string()).collect();
+        let mut all: BTreeSet<String> = self.vars.iter().map(|(_, v)| v.to_string()).collect();
         all.extend(self.plaintexts.iter().map(|p| p.to_string()));
         all.into_iter().collect()
     }
@@ -92,7 +91,10 @@ pub fn resolve(
             )));
         }
         for field in &entry.fields {
-            vars.insert(env_name(&field.id), Zeroizing::new(field.value().to_string()));
+            vars.insert(
+                env_name(&field.id),
+                Zeroizing::new(field.value().to_string()),
+            );
         }
     }
 
@@ -395,12 +397,14 @@ fn resolve_ref(vault: &Vault, raw: &str, now: DateTime<Utc>) -> Result<String> {
         Err(Error::NotFound(msg)) => Err(Error::not_found(crate::msg!(
             "cannot resolve '{}': {}",
             "无法解析 '{}'：{}",
-            raw, msg
+            raw,
+            msg
         ))),
         Err(Error::Ambiguous(msg)) => Err(Error::Ambiguous(crate::msg!(
             "cannot resolve '{}': {}",
             "无法解析 '{}'：{}",
-            raw, msg
+            raw,
+            msg
         ))),
         Err(other) => Err(other),
     }
@@ -490,14 +494,12 @@ enum ChildIo {
 
 /// Spawn the child: environment = the current process environment + injected variables (overriding same-named ones), exit code passed through verbatim.
 fn spawn_child(command: &[String], injection: &Injection, io: ChildIo) -> Result<i32> {
-    let (program, args) = command
-        .split_first()
-        .ok_or_else(|| {
-            Error::usage(crate::msg!(
-                "no command to run; expected `akey run … -- <command>`",
-                "没有要运行的命令；应为 `akey run … -- <command>`"
-            ))
-        })?;
+    let (program, args) = command.split_first().ok_or_else(|| {
+        Error::usage(crate::msg!(
+            "no command to run; expected `akey run … -- <command>`",
+            "没有要运行的命令；应为 `akey run … -- <command>`"
+        ))
+    })?;
     let mut child = Command::new(program);
     child.args(args);
     for (name, value) in &injection.vars {
@@ -634,26 +636,37 @@ mod tests {
     }
 
     fn fixture() -> Vault {
-        let now = DateTime::from_timestamp(1_700_000_000, 0).expect("the timestamp is in the valid range");
+        let now = DateTime::from_timestamp(1_700_000_000, 0)
+            .expect("the timestamp is in the valid range");
         let mut vault = Vault::default();
 
         let mut openai = Entry::new(ulid(1), "openai".to_string(), Category::Apikey, now);
+        openai.fields.push(field(
+            "credential",
+            FieldType::Concealed,
+            "sk-live-OPENAI-SECRET",
+        ));
         openai
             .fields
-            .push(field("credential", FieldType::Concealed, "sk-live-OPENAI-SECRET"));
-        openai.fields.push(field("org", FieldType::String, "org-acme"));
+            .push(field("org", FieldType::String, "org-acme"));
         vault.entries.insert(openai.id, openai);
 
         let mut db = Entry::new(ulid(2), "db".to_string(), Category::Database, now);
+        db.fields.push(field(
+            "password",
+            FieldType::Concealed,
+            "db-password-SECRET",
+        ));
         db.fields
-            .push(field("password", FieldType::Concealed, "db-password-SECRET"));
-        db.fields.push(field("host", FieldType::String, "db.internal"));
+            .push(field("host", FieldType::String, "db.internal"));
         vault.entries.insert(db.id, db);
 
         let mut deploy = Entry::new(ulid(3), "deploy".to_string(), Category::EnvBundle, now);
-        deploy
-            .fields
-            .push(field("API_KEY", FieldType::Concealed, "bundle-API-KEY-value"));
+        deploy.fields.push(field(
+            "API_KEY",
+            FieldType::Concealed,
+            "bundle-API-KEY-value",
+        ));
         deploy
             .fields
             .push(field("DB_HOST", FieldType::String, "db.internal"));
@@ -663,9 +676,11 @@ mod tests {
         vault.entries.insert(deploy.id, deploy);
 
         let mut dotted = Entry::new(ulid(4), "my.api".to_string(), Category::Apikey, now);
-        dotted
-            .fields
-            .push(field("credential", FieldType::Concealed, "sk-dotted-SECRET"));
+        dotted.fields.push(field(
+            "credential",
+            FieldType::Concealed,
+            "sk-dotted-SECRET",
+        ));
         vault.entries.insert(dotted.id, dotted);
 
         vault
@@ -756,11 +771,7 @@ mod tests {
 
     /// Spawns a real child through a POSIX shell, so it and its callers are unix-only.
     #[cfg(unix)]
-    fn pipe_to(
-        script: &str,
-        injection: &Injection,
-        mask: bool,
-    ) -> (i32, SharedSink, SharedSink) {
+    fn pipe_to(script: &str, injection: &Injection, mask: bool) -> (i32, SharedSink, SharedSink) {
         let out = SharedSink::default();
         let err = SharedSink::default();
         let code = spawn_child(
@@ -819,7 +830,12 @@ mod tests {
         let vault = fixture();
         let resolve_one = |spec: &str| resolve(&store, &vault, &specs(&[spec]), &[], &[]);
 
-        for bad in ["=value", "1BAD=value", "has space=value", "=akey://openai/credential"] {
+        for bad in [
+            "=value",
+            "1BAD=value",
+            "has space=value",
+            "=akey://openai/credential",
+        ] {
             let err = resolve_one(bad).expect_err("an invalid variable name should be rejected");
             assert_eq!(err.exit_code(), 2, "spec '{bad}': {err}");
             assert!(matches!(err, Error::Usage(_)), "spec '{bad}': {err:?}");
@@ -838,11 +854,18 @@ mod tests {
         // A reference to a nonexistent entry → not_found, naming the reference text.
         let err = resolve_one("X=akey://nosuchitem/credential").expect_err("reference misses");
         assert_eq!(err.exit_code(), 3);
-        assert!(err.to_string().contains("akey://nosuchitem/credential"), "{err}");
+        assert!(
+            err.to_string().contains("akey://nosuchitem/credential"),
+            "{err}"
+        );
 
         // An embedded reference that misses must name the reference too, not the whole value.
-        let err = resolve_one("X=Bearer akey://nosuchitem/credential").expect_err("reference misses");
-        assert!(err.to_string().contains("akey://nosuchitem/credential"), "{err}");
+        let err =
+            resolve_one("X=Bearer akey://nosuchitem/credential").expect_err("reference misses");
+        assert!(
+            err.to_string().contains("akey://nosuchitem/credential"),
+            "{err}"
+        );
 
         // Entry present, field absent → not_found.
         let err = resolve_one("X=akey://openai/nosuchfield").expect_err("field does not exist");
@@ -851,7 +874,12 @@ mod tests {
         // Default secret field missing → not_found (the apikey entry had its credential field removed).
         let mut broken = fixture();
         let id = ulid(1);
-        broken.entries.get_mut(&id).expect("entry exists").fields.clear();
+        broken
+            .entries
+            .get_mut(&id)
+            .expect("entry exists")
+            .fields
+            .clear();
         let err = resolve(&store, &broken, &specs(&["openai"]), &[], &[])
             .expect_err("a missing field should be an error");
         assert_eq!(err.exit_code(), 3);
@@ -865,10 +893,15 @@ mod tests {
         let store = test_store(dir.path());
         let vault = fixture();
 
-        let injection = resolve(&store, &vault, &[], &specs(&["deploy"]), &[]).expect("bundle injection");
+        let injection =
+            resolve(&store, &vault, &[], &specs(&["deploy"]), &[]).expect("bundle injection");
         let vars = var_map(&injection);
 
-        assert_eq!(vars.len(), 3, "every field of an env-bundle must be injected");
+        assert_eq!(
+            vars.len(),
+            3,
+            "every field of an env-bundle must be injected"
+        );
         assert_eq!(vars["API_KEY"], "bundle-API-KEY-value");
         assert_eq!(vars["DB_HOST"], "db.internal");
         // A `-` in a field slug folds to `_`, or the shell cannot reference it.
@@ -882,13 +915,19 @@ mod tests {
         let mut vault = fixture();
 
         for item in ["openai", "db"] {
-            let err = resolve(&store, &vault, &[], &specs(&[item]), &[]).expect_err("not an env-bundle");
+            let err =
+                resolve(&store, &vault, &[], &specs(&[item]), &[]).expect_err("not an env-bundle");
             assert_eq!(err.exit_code(), 2, "{item}: {err}");
             assert!(err.to_string().contains("env-bundle"), "{err}");
         }
 
         let id = ulid(3);
-        vault.entries.get_mut(&id).expect("entry exists").fields.clear();
+        vault
+            .entries
+            .get_mut(&id)
+            .expect("entry exists")
+            .fields
+            .clear();
         let err = resolve(&store, &vault, &[], &specs(&["deploy"]), &[]).expect_err("empty bundle");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("no fields"), "{err}");
@@ -922,11 +961,15 @@ mod tests {
             ),
         );
 
-        let injection = resolve(&store, &vault, &[], &[], &[path]).expect("the env-file should parse");
+        let injection =
+            resolve(&store, &vault, &[], &[], &[path]).expect("the env-file should parse");
         let vars = var_map(&injection);
 
         assert_eq!(vars["EXPORTED"], "exported-value");
-        assert_eq!(vars["TAB_EXPORTED"], "tab-exported", "a tab after `export` is a separator too");
+        assert_eq!(
+            vars["TAB_EXPORTED"], "tab-exported",
+            "a tab after `export` is a separator too"
+        );
         assert_eq!(vars["QUOTED"], "double quoted");
         assert_eq!(vars["SINGLE"], "single quoted");
         assert_eq!(vars["WITH_EQUALS"], "a=b=c");
@@ -962,7 +1005,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         let store = test_store(dir.path());
         let vault = fixture();
-        let first = env_file(dir.path(), "first.env", "API_KEY=from-first-file\nONLY_FILE=first\n");
+        let first = env_file(
+            dir.path(),
+            "first.env",
+            "API_KEY=from-first-file\nONLY_FILE=first\n",
+        );
         let second = env_file(dir.path(), "second.env", "API_KEY=from-second-file\n");
         let files = vec![first, second];
 
@@ -980,7 +1027,8 @@ mod tests {
         assert_eq!(vars["ONLY_FILE"], "first");
 
         // Drop `--with` → `--bundle` wins.
-        let injection = resolve(&store, &vault, &[], &specs(&["deploy"]), &files).expect("should resolve");
+        let injection =
+            resolve(&store, &vault, &[], &specs(&["deploy"]), &files).expect("should resolve");
         let vars = var_map(&injection);
         assert_eq!(vars["API_KEY"], "bundle-API-KEY-value");
         // With several env files, a later one overrides an earlier one.
@@ -1049,7 +1097,10 @@ mod tests {
             &[],
         )
         .expect("should resolve");
-        assert_eq!(forward.vars, reversed.vars, "the same set of inputs must yield the same environment");
+        assert_eq!(
+            forward.vars, reversed.vars,
+            "the same set of inputs must yield the same environment"
+        );
     }
 
     // ---- touch: the authorization surface -----------------------------
@@ -1074,22 +1125,23 @@ mod tests {
 
         // Texts containing references go to `authorize_references`: the spec texts + the env file contents.
         assert_eq!(surface.texts.len(), 3);
-        assert_eq!(surface.texts[0], "TOKEN=akey://openai/credential\nOTHER=akey://openai/org\n");
+        assert_eq!(
+            surface.texts[0],
+            "TOKEN=akey://openai/credential\nOTHER=akey://openai/org\n"
+        );
         assert_eq!(surface.texts[1], "OPENAI=akey://openai/credential");
-        assert_eq!(surface.texts[2], "db", "a bare entry text is handed to authorize_references as well (it holds no reference)");
+        assert_eq!(
+            surface.texts[2], "db",
+            "a bare entry text is handed to authorize_references as well (it holds no reference)"
+        );
         // Forms without a reference resolve to an entry name (an ID the user passes is normalized to the name too).
         assert_eq!(surface.items, vec!["db", "deploy"]);
         // For auditing: every entry name touched, deduplicated and sorted.
         assert_eq!(surface.subjects, vec!["db", "deploy", "openai"]);
 
         // An ID must normalize to the entry name too, or the scope comparison (which compares names) would misjudge.
-        let by_id = touch(
-            &vault,
-            &specs(&[&ulid(2).to_string()]),
-            &[],
-            &[],
-        )
-        .expect("should compute the authorization surface");
+        let by_id = touch(&vault, &specs(&[&ulid(2).to_string()]), &[], &[])
+            .expect("should compute the authorization surface");
         assert_eq!(by_id.items, vec!["db"]);
     }
 
@@ -1114,7 +1166,10 @@ mod tests {
             )
         );
 
-        assert_eq!(render_template(&vault, "no refs").expect("returned as is"), "no refs");
+        assert_eq!(
+            render_template(&vault, "no refs").expect("returned as is"),
+            "no refs"
+        );
         assert_eq!(render_template(&vault, "").expect("empty input"), "");
     }
 
@@ -1126,11 +1181,18 @@ mod tests {
             .expect_err("entry does not exist");
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
         assert_eq!(err.exit_code(), 3);
-        assert!(err.to_string().contains("akey://nosuchitem/credential"), "{err}");
+        assert!(
+            err.to_string().contains("akey://nosuchitem/credential"),
+            "{err}"
+        );
 
-        let err = render_template(&vault, "a\nakey://openai/nosuchfield\n").expect_err("field does not exist");
+        let err = render_template(&vault, "a\nakey://openai/nosuchfield\n")
+            .expect_err("field does not exist");
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
-        assert!(err.to_string().contains("akey://openai/nosuchfield"), "{err}");
+        assert!(
+            err.to_string().contains("akey://openai/nosuchfield"),
+            "{err}"
+        );
     }
 
     // ---- execute: exit codes ------------------------------------------
@@ -1140,9 +1202,15 @@ mod tests {
     fn execute_passes_the_child_exit_code_through() {
         let injection = Injection::default();
         assert_eq!(execute(&sh("exit 0"), &injection, false).expect("start"), 0);
-        assert_eq!(execute(&sh("exit 42"), &injection, false).expect("start"), 42);
+        assert_eq!(
+            execute(&sh("exit 42"), &injection, false).expect("start"),
+            42
+        );
         // Masking mode passes the exit code through just the same.
-        assert_eq!(execute(&sh("exit 42"), &injection, true).expect("start"), 42);
+        assert_eq!(
+            execute(&sh("exit 42"), &injection, true).expect("start"),
+            42
+        );
         assert_eq!(execute(&sh("exit 7"), &injection, true).expect("start"), 7);
     }
 
@@ -1166,7 +1234,10 @@ mod tests {
 
     #[cfg(unix)]
     fn secret_injection() -> Injection {
-        Injection::from_vars(vec![("SECRET".to_string(), Zeroizing::new(SECRET.to_string()))])
+        Injection::from_vars(vec![(
+            "SECRET".to_string(),
+            Zeroizing::new(SECRET.to_string()),
+        )])
     }
 
     #[cfg(unix)]
@@ -1192,7 +1263,11 @@ mod tests {
     fn unmasked_output_passes_the_plaintext_through() {
         let (code, out, _) = pipe_to("printf %s \"$SECRET\"", &secret_injection(), false);
         assert_eq!(code, 0);
-        assert_eq!(out.text(), SECRET, "without masking it must come through verbatim");
+        assert_eq!(
+            out.text(),
+            SECRET,
+            "without masking it must come through verbatim"
+        );
     }
 
     #[test]
@@ -1213,8 +1288,15 @@ mod tests {
             )
             .expect("pumping should succeed");
             let rendered = sink.text();
-            assert_eq!(rendered, format!("before {TAINTED} after"), "chunk size {size}");
-            assert!(!rendered.contains(SECRET), "chunk size {size} leaked plaintext");
+            assert_eq!(
+                rendered,
+                format!("before {TAINTED} after"),
+                "chunk size {size}"
+            );
+            assert!(
+                !rendered.contains(SECRET),
+                "chunk size {size} leaked plaintext"
+            );
         }
     }
 
@@ -1226,11 +1308,18 @@ mod tests {
         let pieces = ["S3CRE", "T-VAL", "UE-TH", "AT-IS", "-LONG"];
         assert_eq!(pieces.concat(), secret);
         // Every piece is shorter than MIN_SECRET_LEN: only the concatenation is long enough, so masking must rely on the cross-chunk window.
-        assert!(pieces.iter().all(|p| p.len() < crate::inject::mask::MIN_SECRET_LEN));
+        assert!(
+            pieces
+                .iter()
+                .all(|p| p.len() < crate::inject::mask::MIN_SECRET_LEN)
+        );
 
         let mut vars = vec![("SECRET".to_string(), Zeroizing::new(secret.to_string()))];
         for (index, piece) in pieces.iter().enumerate() {
-            vars.push((format!("PIECE{index}"), Zeroizing::new((*piece).to_string())));
+            vars.push((
+                format!("PIECE{index}"),
+                Zeroizing::new((*piece).to_string()),
+            ));
         }
         let script = "/bin/echo -n \"$PIECE0\"; sleep 0.05; /bin/echo -n \"$PIECE1\"; \
                       sleep 0.05; /bin/echo -n \"$PIECE2\"; sleep 0.05; \
@@ -1238,17 +1327,27 @@ mod tests {
 
         let (code, out, _) = pipe_to(script, &Injection::from_vars(vars), true);
         assert_eq!(code, 0);
-        assert_eq!(out.text(), TAINTED, "a secret spanning write chunks must be masked whole");
+        assert_eq!(
+            out.text(),
+            TAINTED,
+            "a secret spanning write chunks must be masked whole"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn short_values_are_left_alone() {
-        let injection =
-            Injection::from_vars(vec![("FLAG".to_string(), Zeroizing::new("true".to_string()))]);
+        let injection = Injection::from_vars(vec![(
+            "FLAG".to_string(),
+            Zeroizing::new("true".to_string()),
+        )]);
         let (code, out, _) = pipe_to("printf 'flag=%s' \"$FLAG\"", &injection, true);
         assert_eq!(code, 0);
-        assert_eq!(out.text(), "flag=true", "a short value should not be mosaic'd");
+        assert_eq!(
+            out.text(),
+            "flag=true",
+            "a short value should not be mosaic'd"
+        );
     }
 
     // ---- helpers ------------------------------------------------------

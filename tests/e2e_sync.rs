@@ -57,7 +57,8 @@ fn entry_names(device: &Device) -> Vec<String> {
 #[test]
 fn a_second_device_reads_what_the_first_stored() {
     let pair = pair();
-    pair.alpha.set_secret("openai", "credential", "sk-alpha-canary");
+    pair.alpha
+        .set_secret("openai", "credential", "sk-alpha-canary");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
 
     pair.beta.run_ok_with_env(&["sync"], &[]);
@@ -84,7 +85,8 @@ fn edits_to_different_entries_merge_without_conflict() {
     // The point: beta must **not** pull first. It stays at S0, alpha pushes to S1, then beta
     // commits on top of S0 — only that forms a real fork (common ancestor S0). If beta pulls
     // first it is merely "ahead", taking the plain push path.
-    pair.alpha.set_secret("alpha-key", "credential", "from-alpha");
+    pair.alpha
+        .set_secret("alpha-key", "credential", "from-alpha");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
 
     pair.beta.set_secret("beta-key", "credential", "from-beta");
@@ -120,9 +122,15 @@ fn conflicting_edits_keep_both_sides_and_are_resolvable() {
 
     // beta syncs → the merge is committed and pushed, but exit code 5 explicitly demands a human look.
     let (code, kind, stdout) = pair.beta.expect_failure(&["sync"]);
-    assert_eq!(code, 5, "conflicts must be surfaced with a distinct exit code");
+    assert_eq!(
+        code, 5,
+        "conflicts must be surfaced with a distinct exit code"
+    );
     assert_eq!(kind, "conflict");
-    assert!(stdout.trim().is_empty(), "a failing command must not write stdout");
+    assert!(
+        stdout.trim().is_empty(),
+        "a failing command must not write stdout"
+    );
 
     // Both sides' values survive: the original entry + a conflict copy.
     let names = entry_names(&pair.beta);
@@ -138,7 +146,8 @@ fn conflicting_edits_keep_both_sides_and_are_resolvable() {
     assert_eq!(conflicts["conflicts"].as_array().unwrap().len(), 1);
 
     // Pick one side, then converge.
-    pair.beta.run_ok_with_env(&["resolve", "shared", "--theirs"], &[]);
+    pair.beta
+        .run_ok_with_env(&["resolve", "shared", "--theirs"], &[]);
     assert_eq!(entry_names(&pair.beta), vec!["shared".to_string()]);
     assert!(
         pair.beta
@@ -191,20 +200,31 @@ fn a_revoked_device_can_no_longer_open_the_vault() {
     pair.alpha.set_secret("openai", "credential", "sk-secret");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
     pair.beta.run_ok_with_env(&["sync"], &[]);
-    assert!(pair.beta.stdout(&["read", "akey://openai/credential"]).contains("sk-secret"));
+    assert!(
+        pair.beta
+            .stdout(&["read", "akey://openai/credential"])
+            .contains("sk-secret")
+    );
 
     // alpha removes beta and re-encrypts.
     pair.alpha.run_ok_with_env(&["devices", "rm", "beta"], &[]);
 
     // beta can now neither sync nor read.
     let out = pair.beta.run(&["sync"]);
-    assert!(!out.status.success(), "revoked device must not sync cleanly");
+    assert!(
+        !out.status.success(),
+        "revoked device must not sync cleanly"
+    );
 
     let (code, _, _) = pair.beta.expect_failure(&["list"]);
     assert_eq!(code, 4, "revoked device must be locked out");
 
     // alpha itself is unaffected.
-    assert!(pair.alpha.stdout(&["read", "akey://openai/credential"]).contains("sk-secret"));
+    assert!(
+        pair.alpha
+            .stdout(&["read", "akey://openai/credential"])
+            .contains("sk-secret")
+    );
 }
 
 #[test]
@@ -226,10 +246,15 @@ fn devices_rm_refuses_to_lock_out_the_current_machine() {
 #[test]
 fn revocation_survives_a_fast_forward() {
     let pair = pair();
-    pair.alpha.set_secret("openai", "credential", "sk-before-revoke");
+    pair.alpha
+        .set_secret("openai", "credential", "sk-before-revoke");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
     pair.beta.run_ok_with_env(&["sync"], &[]);
-    assert!(pair.beta.stdout(&["read", "akey://openai/credential"]).contains("sk-before-revoke"));
+    assert!(
+        pair.beta
+            .stdout(&["read", "akey://openai/credential"])
+            .contains("sk-before-revoke")
+    );
 
     pair.alpha.run_ok_with_env(&["devices", "rm", "beta"], &[]);
 
@@ -239,7 +264,10 @@ fn revocation_survives_a_fast_forward() {
         vec!["fetch", "--quiet", "origin"],
         vec!["reset", "--hard", "origin/main"],
     ] {
-        assert!(git(&repo, &args).status.success(), "test setup: git {args:?}");
+        assert!(
+            git(&repo, &args).status.success(),
+            "test setup: git {args:?}"
+        );
     }
     let path = repo.join("recipients.json");
     let mut file: serde_json::Value =
@@ -252,34 +280,55 @@ fn revocation_survives_a_fast_forward() {
     std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
     assert!(git(&repo, &["add", "-A"]).status.success());
     assert!(
-        git(&repo, &["-c", "user.name=beta", "-c", "user.email=b@x.y", "commit", "-q", "-m", "rejoin"])
-            .status
-            .success()
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=beta",
+                "-c",
+                "user.email=b@x.y",
+                "commit",
+                "-q",
+                "-m",
+                "rejoin"
+            ]
+        )
+        .status
+        .success()
     );
     assert!(
-        git(&repo, &["push", "--quiet", "origin", "HEAD"]).status.success(),
+        git(&repo, &["push", "--quiet", "origin", "HEAD"])
+            .status
+            .success(),
         "a device with git write access can always push"
     );
 
     // alpha's fast-forward sync must not adopt this tampered recipient list.
     pair.alpha.run_ok_with_env(&["sync"], &[]);
 
-    let recipients: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(pair.alpha.repo().join("recipients.json")).unwrap())
-            .unwrap();
+    let recipients: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(pair.alpha.repo().join("recipients.json")).unwrap(),
+    )
+    .unwrap();
     let beta_active = recipients["recipients"]
         .as_object()
         .unwrap()
         .values()
         .any(|r| r["name"] == "beta" && r.get("revoked_at").is_none());
-    assert!(!beta_active, "the revocation must not be undone by a fast-forward");
+    assert!(
+        !beta_active,
+        "the revocation must not be undone by a fast-forward"
+    );
 
     // And it really cannot read what was written afterwards.
-    pair.alpha.set_secret("openai", "credential", "sk-after-revoke");
+    pair.alpha
+        .set_secret("openai", "credential", "sk-after-revoke");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
     let _ = git(&repo, &["fetch", "--quiet", "origin"]);
     let _ = git(&repo, &["reset", "--hard", "origin/main"]);
-    let (code, _, _) = pair.beta.expect_failure(&["read", "akey://openai/credential"]);
+    let (code, _, _) = pair
+        .beta
+        .expect_failure(&["read", "akey://openai/credential"]);
     assert_eq!(code, 4, "a revoked device must stay locked out");
 }
 
@@ -335,9 +384,14 @@ fn an_injected_recipient_never_receives_ciphertext() {
     // The attacker has remote **write** access: clone, change one JSON field, commit, push. No keys needed.
     let scratch = TempDir::new().unwrap();
     let clone = scratch.path().join("clone");
-    assert!(git(scratch.path(), &["clone", "--quiet", &url, clone.to_str().unwrap()])
+    assert!(
+        git(
+            scratch.path(),
+            &["clone", "--quiet", &url, clone.to_str().unwrap()]
+        )
         .status
-        .success());
+        .success()
+    );
     let path = clone.join("recipients.json");
     let mut file: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -350,11 +404,27 @@ fn an_injected_recipient_never_receives_ciphertext() {
     std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
     assert!(git(&clone, &["add", "-A"]).status.success());
     assert!(
-        git(&clone, &["-c", "user.name=x", "-c", "user.email=x@y.z", "commit", "-q", "-m", "add node"])
+        git(
+            &clone,
+            &[
+                "-c",
+                "user.name=x",
+                "-c",
+                "user.email=x@y.z",
+                "commit",
+                "-q",
+                "-m",
+                "add node"
+            ]
+        )
+        .status
+        .success()
+    );
+    assert!(
+        git(&clone, &["push", "--quiet", "origin", "HEAD"])
             .status
             .success()
     );
-    assert!(git(&clone, &["push", "--quiet", "origin", "HEAD"]).status.success());
 
     // The victim syncs: the public key enters the directory but is marked pending and is not encrypted to.
     let data = victim.json_ok(&["sync"]);
@@ -383,8 +453,16 @@ fn an_injected_recipient_never_receives_ciphertext() {
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(&config_path, rewritten).unwrap();
-    assert!(git(&clone, &["fetch", "--quiet", "origin"]).status.success());
-    assert!(git(&clone, &["reset", "--hard", "origin/main"]).status.success());
+    assert!(
+        git(&clone, &["fetch", "--quiet", "origin"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&clone, &["reset", "--hard", "origin/main"])
+            .status
+            .success()
+    );
 
     let (code, kind, stdout) = attacker.expect_failure(&["read", "akey://openai/credential"]);
     assert_eq!(code, 4, "an injected recipient must be locked out ({kind})");
@@ -401,14 +479,23 @@ fn trusting_a_recipient_lets_it_decrypt() {
     pair.alpha.set_secret("openai", "credential", "sk-for-beta");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
     pair.beta.run_ok_with_env(&["sync"], &[]);
-    assert!(pair.beta.stdout(&["read", "akey://openai/credential"]).contains("sk-for-beta"));
+    assert!(
+        pair.beta
+            .stdout(&["read", "akey://openai/credential"])
+            .contains("sk-for-beta")
+    );
 
     // Revoke approval: still in the directory, but gets no new ciphertext.
-    pair.alpha.run_ok_with_env(&["devices", "untrust", "beta"], &[]);
-    pair.alpha.set_secret("openai", "credential", "sk-after-untrust");
+    pair.alpha
+        .run_ok_with_env(&["devices", "untrust", "beta"], &[]);
+    pair.alpha
+        .set_secret("openai", "credential", "sk-after-untrust");
     pair.alpha.run_ok_with_env(&["sync"], &[]);
     let out = pair.beta.run(&["sync"]);
-    assert!(!out.status.success(), "beta can no longer open new revisions");
+    assert!(
+        !out.status.success(),
+        "beta can no longer open new revisions"
+    );
 }
 
 #[test]

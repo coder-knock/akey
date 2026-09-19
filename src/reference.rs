@@ -112,7 +112,10 @@ impl Reference {
             }
         };
 
-        for segment in [Some(vault), Some(item), section, Some(field)].into_iter().flatten() {
+        for segment in [Some(vault), Some(item), section, Some(field)]
+            .into_iter()
+            .flatten()
+        {
             validate_segment(segment, input)?;
         }
 
@@ -154,7 +157,11 @@ fn is_segment_char(c: char) -> bool {
 /// A segment must be non-empty and hold only legal characters.
 fn validate_segment(segment: &str, input: &str) -> Result<()> {
     if segment.is_empty() {
-        return Err(Error::usage(crate::msg!("empty segment in '{}'", "'{}' 中存在空段", input)));
+        return Err(Error::usage(crate::msg!(
+            "empty segment in '{}'",
+            "'{}' 中存在空段",
+            input
+        )));
     }
     if let Some(bad) = segment.chars().find(|c| !is_segment_char(*c)) {
         return Err(Error::usage(crate::msg!(
@@ -171,7 +178,11 @@ fn validate_segment(segment: &str, input: &str) -> Result<()> {
 /// Parse `?attribute=a&attribute=b`. An unknown parameter name, an unknown value, or a missing `=` → `usage`.
 fn parse_query(query: &str, input: &str) -> Result<Attribute> {
     if query.is_empty() {
-        return Err(Error::usage(crate::msg!("empty query in '{}'", "'{}' 中存在空查询串", input)));
+        return Err(Error::usage(crate::msg!(
+            "empty query in '{}'",
+            "'{}' 中存在空查询串",
+            input
+        )));
     }
     let mut attribute = Attribute::Value;
     for param in query.split('&') {
@@ -230,11 +241,11 @@ fn expand_vars(input: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<Stri
         let name = &tail[..len];
         let value = env(name).ok_or_else(|| {
             Error::usage(crate::msg!(
-            "undefined variable '{}' in reference '{}'",
-            "未定义的变量 '{}'（引用 '{}'）",
-            name,
-            input
-        ))
+                "undefined variable '{}' in reference '{}'",
+                "未定义的变量 '{}'（引用 '{}'）",
+                name,
+                input
+            ))
         })?;
         out.push_str(&value);
         rest = &tail[len..];
@@ -281,7 +292,9 @@ pub fn find_field<'a>(entry: &'a Entry, reference: &Reference) -> Result<&'a Fie
         n => Err(Error::Ambiguous(crate::msg!(
             "'{}' matches {} fields in entry '{}'; qualify with a section",
             "'{}' 匹配 {} 个字段（条目 '{}'）；请用 section 限定",
-            reference.field, n, entry.name
+            reference.field,
+            n,
+            entry.name
         ))),
     }
 }
@@ -321,12 +334,13 @@ pub fn resolve(
 /// and an explicit time lets tests assert deterministically.
 fn totp_at(value: &str, label: &str, now: DateTime<Utc>) -> Result<String> {
     // Do not echo the field value on error: it is the secret (the URI carries the base32 secret).
-    let totp = totp_rs::Totp::from_url(value)
-        .map_err(|_| Error::usage(crate::msg!(
+    let totp = totp_rs::Totp::from_url(value).map_err(|_| {
+        Error::usage(crate::msg!(
             "field '{}' is not a valid otpauth:// URI",
             "字段 '{}' 不是合法的 otpauth:// URI",
             label
-        )))?;
+        ))
+    })?;
     let seconds = u64::try_from(now.timestamp()).map_err(|_| {
         Error::crypto(crate::msg!(
             "cannot generate a TOTP for a timestamp before the unix epoch",
@@ -392,7 +406,9 @@ mod tests {
     const RFC_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
     fn otp_uri(digits: u8) -> String {
-        format!("otpauth://totp/Acme:alice?secret={RFC_SECRET}&digits={digits}&algorithm=SHA1&period=30")
+        format!(
+            "otpauth://totp/Acme:alice?secret={RFC_SECRET}&digits={digits}&algorithm=SHA1&period=30"
+        )
     }
 
     struct Fixture {
@@ -408,23 +424,44 @@ mod tests {
 
         let mut o = Entry::new(openai, "openai".to_string(), Category::Apikey, now);
         o.title = Some("OpenAI".to_string());
+        o.fields.push(field(
+            "credential",
+            FieldType::Concealed,
+            "sk-live-123",
+            None,
+        ));
         o.fields
-            .push(field("credential", FieldType::Concealed, "sk-live-123", None));
-        o.fields.push(field("Org", FieldType::String, "org-acme", None));
-        o.fields
-            .push(field("Private Key", FieldType::SshKey, "ssh-rsa AAAA", None));
+            .push(field("Org", FieldType::String, "org-acme", None));
+        o.fields.push(field(
+            "Private Key",
+            FieldType::SshKey,
+            "ssh-rsa AAAA",
+            None,
+        ));
 
         let mut a = Entry::new(acme, "acme".to_string(), Category::Login, now);
-        a.fields
-            .push(field("password", FieldType::Concealed, "prod-pw", Some("Prod")));
-        a.fields
-            .push(field("password", FieldType::Concealed, "dev-pw", Some("Dev")));
+        a.fields.push(field(
+            "password",
+            FieldType::Concealed,
+            "prod-pw",
+            Some("Prod"),
+        ));
+        a.fields.push(field(
+            "password",
+            FieldType::Concealed,
+            "dev-pw",
+            Some("Dev"),
+        ));
         a.fields
             .push(field("otp", FieldType::Otp, &otp_uri(8), None));
         a.fields
             .push(field("otp6", FieldType::Otp, &otp_uri(6), None));
-        a.fields
-            .push(field("broken", FieldType::Concealed, "not-an-otpauth-uri", None));
+        a.fields.push(field(
+            "broken",
+            FieldType::Concealed,
+            "not-an-otpauth-uri",
+            None,
+        ));
 
         let mut vault = Vault::default();
         vault.entries.insert(openai, o);
@@ -583,8 +620,8 @@ mod tests {
         assert_eq!(got.field, "credential");
 
         // Expansion happens before parsing, so an expanded value may appear in any segment.
-        let got = Reference::parse_in("akey://$ITEM/credential?attribute=otp", &env)
-            .expect("expands");
+        let got =
+            Reference::parse_in("akey://$ITEM/credential?attribute=otp", &env).expect("expands");
         assert_eq!(got.item, "OpenAI");
         assert_eq!(got.field, "credential");
         assert_eq!(got.attribute, Attribute::Otp);
@@ -600,7 +637,9 @@ mod tests {
         assert_eq!(e.exit_code(), 2);
 
         // What follows `$` is not a variable name: the `$` is kept and then judged an illegal character.
-        let e = Reference::parse_in("akey://db/pw$", &|_| None).err().expect("$ stays");
+        let e = Reference::parse_in("akey://db/pw$", &|_| None)
+            .err()
+            .expect("$ stays");
         assert!(matches!(&e, Error::Usage(_)), "got {e:?}");
     }
 
@@ -620,7 +659,9 @@ mod tests {
 
         // The vault-less spelling is completed into the canonical form.
         assert_eq!(
-            Reference::parse("akey://db/password").expect("parses").to_string(),
+            Reference::parse("akey://db/password")
+                .expect("parses")
+                .to_string(),
             "akey://default/db/password"
         );
         // `attribute=value` is the default and is omitted from the canonical form.
@@ -677,18 +718,27 @@ mod tests {
             "akey://openai/Credential",
         ] {
             let reference = Reference::parse(input).expect(input);
-            assert_eq!(find_field(openai, &reference).expect(input).id, "credential");
+            assert_eq!(
+                find_field(openai, &reference).expect(input).id,
+                "credential"
+            );
         }
 
         // `private-key` is the slug of "Private Key": a label with spaces can only be referenced this way.
         for input in ["akey://openai/private-key", "akey://openai/PRIVATE-KEY"] {
             let reference = Reference::parse(input).expect(input);
-            assert_eq!(find_field(openai, &reference).expect(input).label, "Private Key");
+            assert_eq!(
+                find_field(openai, &reference).expect(input).label,
+                "Private Key"
+            );
         }
 
         // Label matching is case-insensitive.
         let reference = Reference::parse("akey://openai/ORG").expect("parses");
-        assert_eq!(find_field(openai, &reference).expect("hits").value(), "org-acme");
+        assert_eq!(
+            find_field(openai, &reference).expect("hits").value(),
+            "org-acme"
+        );
     }
 
     #[test]
@@ -705,11 +755,17 @@ mod tests {
         assert_eq!(resolve_str("akey://openai/credential"), "sk-live-123");
         assert_eq!(resolve_str("akey://default/acme/prod/password"), "prod-pw");
 
-        assert_eq!(resolve_str("akey://openai/credential?attribute=title"), "OpenAI");
+        assert_eq!(
+            resolve_str("akey://openai/credential?attribute=title"),
+            "OpenAI"
+        );
         // With no title it falls back to the entry name.
         assert_eq!(resolve_str("akey://acme/password?attribute=title"), "acme");
 
-        assert_eq!(resolve_str("akey://openai/credential?attribute=type"), "concealed");
+        assert_eq!(
+            resolve_str("akey://openai/credential?attribute=type"),
+            "concealed"
+        );
         assert_eq!(resolve_str("akey://openai/org?attribute=type"), "string");
 
         let id = resolve_str("akey://openai/credential?attribute=id");
@@ -753,7 +809,9 @@ mod tests {
 
         // The 6-digit variant: the same secret and time as RFC 6238, truncated to 6 digits → 287082.
         let six = Reference::parse("akey://acme/otp6?attribute=otp").expect("parses");
-        let code = resolve(&f.vault, &six, ts(59)).expect("generates").to_string();
+        let code = resolve(&f.vault, &six, ts(59))
+            .expect("generates")
+            .to_string();
         assert_eq!(code, "287082");
         assert_eq!(code.len(), 6);
         assert!(code.chars().all(|c| c.is_ascii_digit()));
@@ -792,7 +850,10 @@ mod tests {
 
         // No reference (including the scheme-only spelling from the docs) → empty.
         assert_eq!(extract_references(""), Vec::<String>::new());
-        assert_eq!(extract_references("nothing to see here"), Vec::<String>::new());
+        assert_eq!(
+            extract_references("nothing to see here"),
+            Vec::<String>::new()
+        );
         assert_eq!(
             extract_references("see akey://[vault/]item/field for details"),
             Vec::<String>::new()
@@ -812,7 +873,9 @@ mod tests {
         );
 
         assert_eq!(
-            resolve(&f.vault, &reference, ts(0)).expect("resolves").to_string(),
+            resolve(&f.vault, &reference, ts(0))
+                .expect("resolves")
+                .to_string(),
             "sk-live-123"
         );
     }

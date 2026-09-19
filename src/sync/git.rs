@@ -30,7 +30,11 @@ pub struct Git {
 }
 
 impl Git {
-    pub fn new(repo: &Path, author_name: impl Into<String>, author_email: impl Into<String>) -> Self {
+    pub fn new(
+        repo: &Path,
+        author_name: impl Into<String>,
+        author_email: impl Into<String>,
+    ) -> Self {
         Git {
             repo: repo.to_path_buf(),
             author_name: author_name.into(),
@@ -66,7 +70,9 @@ impl Git {
     fn run_optional(&self, args: &[&str]) -> Result<Option<String>> {
         let out = self.output(args)?;
         if out.status.success() {
-            Ok(Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string()))
+            Ok(Some(
+                String::from_utf8_lossy(&out.stdout).trim_end().to_string(),
+            ))
         } else {
             Ok(None)
         }
@@ -433,7 +439,10 @@ mod tests {
         assert!(git.commit("first").unwrap(), "should have committed");
 
         git.add_all().unwrap();
-        assert!(!git.commit("again").unwrap(), "nothing to commit should be false");
+        assert!(
+            !git.commit("again").unwrap(),
+            "nothing to commit should be false"
+        );
     }
 
     #[test]
@@ -494,7 +503,8 @@ mod tests {
         let bare = tempfile::tempdir().unwrap();
         git_in(bare.path(), &["init", "--bare", "--quiet"]);
         let (_guard, git) = temp_repo();
-        git.set_remote(&format!("file://{}", bare.path().display())).unwrap();
+        git.set_remote(&format!("file://{}", bare.path().display()))
+            .unwrap();
 
         std::fs::write(git.repo().join("a.txt"), b"one").unwrap();
         git.add_all().unwrap();

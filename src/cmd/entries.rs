@@ -69,7 +69,11 @@ pub fn get(ctx: &Ctx, args: &GetArgs) -> Result<()> {
     audit::record(
         &ctx.paths,
         store.identity.name(),
-        if args.reveal { Action::Reveal } else { Action::Read },
+        if args.reveal {
+            Action::Reveal
+        } else {
+            Action::Read
+        },
         Some(&entry.name),
         "ok",
     )?;
@@ -81,7 +85,10 @@ pub fn get(ctx: &Ctx, args: &GetArgs) -> Result<()> {
 pub fn set(ctx: &Ctx, args: &SetArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.item.is_empty() {
-        return Err(Error::usage(crate::msg!("set needs an item name", "`set` 需要一个条目名")));
+        return Err(Error::usage(crate::msg!(
+            "set needs an item name",
+            "`set` 需要一个条目名"
+        )));
     }
     let plan = SetPlan::from_args(args)?;
     let store = ctx.store()?;
@@ -131,7 +138,8 @@ pub fn set(ctx: &Ctx, args: &SetArgs) -> Result<()> {
     if dry {
         // In the preview, concealed fields show only the placeholder — plaintext never enters JSON (NFR-9).
         let preview = serde_json::to_value(entry_view(&outcome.entry, false)).map_err(json_err)?;
-        ctx.out.note(&serde_json::to_string_pretty(&preview).map_err(json_err)?);
+        ctx.out
+            .note(&serde_json::to_string_pretty(&preview).map_err(json_err)?);
         data["entry"] = preview;
     }
     ctx.out.emit(human, &data)
@@ -185,7 +193,8 @@ pub fn edit(ctx: &Ctx, args: &EditArgs) -> Result<()> {
     });
     if dry {
         let preview = serde_json::to_value(entry_view(&outcome.entry, false)).map_err(json_err)?;
-        ctx.out.note(&serde_json::to_string_pretty(&preview).map_err(json_err)?);
+        ctx.out
+            .note(&serde_json::to_string_pretty(&preview).map_err(json_err)?);
         data["entry"] = preview;
     }
     ctx.out.emit(human, &data)
@@ -320,7 +329,11 @@ pub fn mv(ctx: &Ctx, args: &MvArgs) -> Result<()> {
     });
     let human = format!(
         "{} '{}' -> '{}' ({})",
-        if dry { "dry run: would rename" } else { "renamed" },
+        if dry {
+            "dry run: would rename"
+        } else {
+            "renamed"
+        },
         outcome.old_name,
         outcome.new_name,
         outcome.id,
@@ -347,13 +360,7 @@ pub fn list(ctx: &Ctx, args: &ListArgs) -> Result<()> {
         .map(EntrySummary::from_entry)
         .collect();
 
-    audit::record(
-        &ctx.paths,
-        store.identity.name(),
-        Action::Read,
-        None,
-        "ok",
-    )?;
+    audit::record(&ctx.paths, store.identity.name(), Action::Read, None, "ok")?;
 
     let json_rows = serde_json::to_value(&rows).map_err(json_err)?;
     let data = json!({ "count": rows.len(), "entries": json_rows });
@@ -439,8 +446,10 @@ pub fn conflicts(ctx: &Ctx, _args: &ConflictsArgs) -> Result<()> {
             .join("\n")
     };
     let json_rows = serde_json::to_value(&rows).map_err(json_err)?;
-    ctx.out
-        .emit(human, &json!({ "count": rows.len(), "conflicts": json_rows }))
+    ctx.out.emit(
+        human,
+        &json!({ "count": rows.len(), "conflicts": json_rows }),
+    )
 }
 
 /// Resolve one conflict: `--ours` drops the copy, `--theirs` overwrites the original-name entry with the copy's content.
@@ -487,7 +496,11 @@ pub fn resolve(ctx: &Ctx, args: &ResolveArgs) -> Result<()> {
     });
     let human = format!(
         "{} conflict on '{}': kept {} side from '{}', removed {} copy/copies",
-        if dry { "dry run: would resolve" } else { "resolved" },
+        if dry {
+            "dry run: would resolve"
+        } else {
+            "resolved"
+        },
         outcome.name,
         outcome.side.as_str(),
         outcome.kept,
@@ -606,10 +619,13 @@ fn build_view(entry: &Entry, fields: Vec<&Field>, revealed: bool) -> EntryView {
         tags: entry.tags.clone(),
         favorite: entry.favorite,
         url: entry.url.clone(),
-        notes: entry
-            .notes
-            .as_ref()
-            .map(|n| if revealed { n.clone() } else { REDACTED.to_string() }),
+        notes: entry.notes.as_ref().map(|n| {
+            if revealed {
+                n.clone()
+            } else {
+                REDACTED.to_string()
+            }
+        }),
         expires_at: entry.expires_at,
         reveal: entry.reveal,
         created_at: entry.created_at,
@@ -639,16 +655,14 @@ fn select_fields<'a>(entry: &'a Entry, wanted: &[String]) -> Result<Vec<&'a Fiel
     }
     let mut selected = Vec::with_capacity(wanted.len());
     for label in wanted {
-        let field = entry
-            .field(label)
-            .ok_or_else(|| {
-                Error::not_found(crate::msg!(
-                    "entry '{}' has no field '{}'",
-                    "条目 '{}' 没有字段 '{}'",
-                    entry.name,
-                    label
-                ))
-            })?;
+        let field = entry.field(label).ok_or_else(|| {
+            Error::not_found(crate::msg!(
+                "entry '{}' has no field '{}'",
+                "条目 '{}' 没有字段 '{}'",
+                entry.name,
+                label
+            ))
+        })?;
         selected.push(field);
     }
     Ok(selected)
@@ -703,7 +717,11 @@ fn render_entry_human(view: &EntryView) -> String {
     if let Some(deleted) = view.deleted_at {
         lines.push(format!("{}{deleted}", l("deleted_at: ", "删除时间：")));
     }
-    lines.push(format!("{}{}", l("reveal: ", "取明文："), view.reveal.as_str()));
+    lines.push(format!(
+        "{}{}",
+        l("reveal: ", "取明文："),
+        view.reveal.as_str()
+    ));
 
     let width = view.fields.iter().map(|f| f.label.len()).max().unwrap_or(0);
     for field in &view.fields {
@@ -724,7 +742,11 @@ fn render_list_human(rows: &[EntrySummary]) -> String {
         return crate::i18n::m("no entries", "没有条目").to_string();
     }
     let name_width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
-    let cat_width = rows.iter().map(|r| r.category.as_str().len()).max().unwrap_or(0);
+    let cat_width = rows
+        .iter()
+        .map(|r| r.category.as_str().len())
+        .max()
+        .unwrap_or(0);
     rows.iter()
         .map(|row| {
             let mut line = format!(
@@ -921,7 +943,11 @@ fn apply_assignment(entry: &mut Entry, assignment: &Assignment) {
     match &assignment.action {
         AssignAction::Delete => entry.fields.retain(|f| !field_matches(f, assignment)),
         AssignAction::Set(value) => {
-            if let Some(field) = entry.fields.iter_mut().find(|f| field_matches(f, assignment)) {
+            if let Some(field) = entry
+                .fields
+                .iter_mut()
+                .find(|f| field_matches(f, assignment))
+            {
                 field.value = Zeroizing::new(value.clone());
                 if let Some(section) = &assignment.section {
                     field.section = Some(section.clone());
@@ -1310,7 +1336,8 @@ fn writable_entry(vault: &Vault, key: &str) -> Result<Option<Entry>> {
         Ok(entry) if entry.is_deleted() => Err(Error::usage(crate::msg!(
             "entry '{}' is deleted; run `akey restore {}` first",
             "条目 '{}' 已删除；请先运行 `akey restore {}`",
-            entry.name, entry.name
+            entry.name,
+            entry.name
         ))),
         Ok(entry) => Ok(Some(entry.clone())),
         Err(Error::NotFound(_)) => Ok(None),
@@ -1394,9 +1421,7 @@ fn apply_set(vault: &mut Vault, plan: &SetPlan, now: DateTime<Utc>) -> Result<Se
             entry
         }
         (Some(entry), None) => entry,
-        (None, Some(template)) => {
-            template.to_entry(Ulid::generate(), plan.name.clone(), now)
-        }
+        (None, Some(template)) => template.to_entry(Ulid::generate(), plan.name.clone(), now),
         (None, None) => skeleton(
             Ulid::generate(),
             plan.name.clone(),
@@ -1982,28 +2007,21 @@ fn apply_resolve(
     // With several copies, take the newest one, the name as tiebreaker, so the result is reproducible.
     copies.sort_by(|a, b| a.2.cmp(&b.2).then(a.1.cmp(&b.1)));
     let (source_id, source_name, _) = copies.last().expect("checked non-empty").clone();
-    let source = vault
-        .entries
-        .get(&source_id)
-        .cloned()
-        .ok_or_else(|| {
-            Error::not_found(crate::msg!(
-                "conflict copy '{}' vanished",
-                "冲突副本 '{}' 已消失",
-                source_name
-            ))
-        })?;
+    let source = vault.entries.get(&source_id).cloned().ok_or_else(|| {
+        Error::not_found(crate::msg!(
+            "conflict copy '{}' vanished",
+            "冲突副本 '{}' 已消失",
+            source_name
+        ))
+    })?;
 
-    let entry = vault
-        .entries
-        .get_mut(&base_id)
-        .ok_or_else(|| {
-            Error::not_found(crate::msg!(
-                "no entry named '{}'",
-                "没有名为 '{}' 的条目",
-                base
-            ))
-        })?;
+    let entry = vault.entries.get_mut(&base_id).ok_or_else(|| {
+        Error::not_found(crate::msg!(
+            "no entry named '{}'",
+            "没有名为 '{}' 的条目",
+            base
+        ))
+    })?;
     if side == Side::Theirs {
         entry.category = source.category;
         entry.title = source.title.clone();
@@ -2040,7 +2058,12 @@ fn json_err(err: serde_json::Error) -> Error {
     Error::Io(std::io::Error::other(err))
 }
 
-fn record_batch(ctx: &Ctx, store: &crate::vault::store::Store, action: Action, report: &BatchReport) -> Result<()> {
+fn record_batch(
+    ctx: &Ctx,
+    store: &crate::vault::store::Store,
+    action: Action,
+    report: &BatchReport,
+) -> Result<()> {
     let outcome = if report.failed.is_empty() {
         "ok"
     } else {
@@ -2211,7 +2234,15 @@ mod tests {
             assert_eq!(&parsed, expected, "{spec}");
         }
 
-        for bad in ["nothing", "=x", "field[bogus]=1", "[delete]", "a[=1", "a[]=1", ".field=x"] {
+        for bad in [
+            "nothing",
+            "=x",
+            "field[bogus]=1",
+            "[delete]",
+            "a[=1",
+            "a[]=1",
+            ".field=x",
+        ] {
             let err = parse_assignment(bad).unwrap_err();
             assert!(matches!(err, Error::Usage(_)), "{bad} -> {err:?}");
         }
@@ -2349,9 +2380,15 @@ mod tests {
         assert_eq!(letters_only.len, DEFAULT_PASSWORD_LEN);
         assert!(letters_only.letters && !letters_only.digits);
 
-        assert!(matches!(parse_recipe("bogus").unwrap_err(), Error::Usage(_)));
+        assert!(matches!(
+            parse_recipe("bogus").unwrap_err(),
+            Error::Usage(_)
+        ));
         assert!(matches!(parse_recipe("0").unwrap_err(), Error::Usage(_)));
-        assert!(matches!(parse_recipe("s,99999").unwrap_err(), Error::Usage(_)));
+        assert!(matches!(
+            parse_recipe("s,99999").unwrap_err(),
+            Error::Usage(_)
+        ));
 
         // A fixed byte source → deterministic assertions on length and character set.
         let mut counter = 0u8;
@@ -2401,7 +2438,14 @@ mod tests {
         conflicting.stdin_text = Some("x".to_string());
         // The CLI layer rejects this combination first; the pure-function layer only guarantees the generated password is non-empty.
         let outcome = apply_set(&mut vault, &conflicting, now()).unwrap();
-        assert!(!outcome.entry.field("credential").unwrap().value().is_empty());
+        assert!(
+            !outcome
+                .entry
+                .field("credential")
+                .unwrap()
+                .value()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2443,8 +2487,18 @@ mod tests {
         assert!(report.failed.is_empty());
         assert_eq!(report.results[0].action, "deleted");
         assert!(vault.entries[&id].deleted_at.is_some());
-        assert_eq!(select_entries(&vault, &list_args(&[], false, None), t).unwrap().len(), 0);
-        assert_eq!(select_entries(&vault, &list_args(&[], true, None), t).unwrap().len(), 1);
+        assert_eq!(
+            select_entries(&vault, &list_args(&[], false, None), t)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            select_entries(&vault, &list_args(&[], true, None), t)
+                .unwrap()
+                .len(),
+            1
+        );
 
         // Idempotent: deleting again is not a failure.
         let again = apply_rm(&mut vault, &["openai".to_string()], false, t);
@@ -2467,7 +2521,10 @@ mod tests {
         let purged = apply_rm(&mut vault, &["openai".to_string()], true, t);
         assert_eq!(purged.results[0].action, "purged");
         assert!(!vault.entries.contains_key(&id));
-        assert!(vault.purged.contains_key(&id), "purge must leave a tombstone");
+        assert!(
+            vault.purged.contains_key(&id),
+            "purge must leave a tombstone"
+        );
     }
 
     // 6. restore
@@ -2598,7 +2655,8 @@ mod tests {
         assert_eq!(with_deleted.len(), 5);
 
         // tags are AND semantics.
-        let llm_prod = select_entries(&vault, &list_args(&["llm", "prod"], false, None), t).unwrap();
+        let llm_prod =
+            select_entries(&vault, &list_args(&["llm", "prod"], false, None), t).unwrap();
         assert_eq!(llm_prod.len(), 1);
         assert_eq!(llm_prod[0].name, "prod-key");
 
@@ -2630,9 +2688,11 @@ mod tests {
     fn conflicts_and_resolve_both_sides() {
         let t = now();
         let mut base = entry("openai", Category::Apikey);
-        base.fields = vec![
-            Field::new("credential", FieldType::Concealed, "ours-value".into()),
-        ];
+        base.fields = vec![Field::new(
+            "credential",
+            FieldType::Concealed,
+            "ours-value".into(),
+        )];
         let base_id = base.id;
         let created = base.created_at;
 
@@ -2661,7 +2721,11 @@ mod tests {
             Some("theirs-value")
         );
         assert_eq!(merged.field("org").map(|f| f.value()), Some("acme"));
-        assert_eq!(merged.tags, vec!["prod".to_string()], "conflict tag cleared");
+        assert_eq!(
+            merged.tags,
+            vec!["prod".to_string()],
+            "conflict tag cleared"
+        );
         assert!(!vault.entries.contains_key(&copy_id));
         assert!(vault.purged.contains_key(&copy_id));
         assert!(conflict_views(&vault).is_empty());
@@ -2698,7 +2762,9 @@ mod tests {
         let ctx_side = |ours: bool, theirs: bool| match (ours, theirs) {
             (true, false) => Ok(Side::Ours),
             (false, true) => Ok(Side::Theirs),
-            _ => Err::<Side, Error>(Error::usage("resolve needs exactly one of --ours or --theirs")),
+            _ => Err::<Side, Error>(Error::usage(
+                "resolve needs exactly one of --ours or --theirs",
+            )),
         };
         assert_eq!(ctx_side(true, false).unwrap(), Side::Ours);
         assert_eq!(ctx_side(false, true).unwrap(), Side::Theirs);
@@ -2720,7 +2786,10 @@ mod tests {
         let hidden = serde_json::to_string(&entry_view(&e, false)).unwrap();
         assert!(!hidden.contains(CANARY), "concealed value leaked: {hidden}");
         assert!(hidden.contains(REDACTED));
-        assert!(hidden.contains("https://example.test"), "plain fields stay visible");
+        assert!(
+            hidden.contains("https://example.test"),
+            "plain fields stay visible"
+        );
         assert!(hidden.contains("akey://default/openai/credential"));
 
         // The summary (list) does not even carry field values.
@@ -2734,13 +2803,24 @@ mod tests {
         let plan = set_plan("leaky", Some(Category::Apikey), &[]);
         let outcome = apply_set(&mut vault, &plan, now()).unwrap();
         let mut leaky = outcome.entry;
-        leaky.fields = vec![Field::new("credential", FieldType::Concealed, CANARY.into())];
+        leaky.fields = vec![Field::new(
+            "credential",
+            FieldType::Concealed,
+            CANARY.into(),
+        )];
         let preview = serde_json::to_string(&entry_view(&leaky, false)).unwrap();
-        assert!(!preview.contains(CANARY), "dry-run preview leaked: {preview}");
+        assert!(
+            !preview.contains(CANARY),
+            "dry-run preview leaked: {preview}"
+        );
         assert!(preview.contains(REDACTED));
 
         // The escape hatch: plaintext only on an explicit reveal.
-        assert!(serde_json::to_string(&entry_view(&e, true)).unwrap().contains(CANARY));
+        assert!(
+            serde_json::to_string(&entry_view(&e, true))
+                .unwrap()
+                .contains(CANARY)
+        );
     }
 
     #[test]

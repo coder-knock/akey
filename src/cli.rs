@@ -416,12 +416,21 @@ pub enum DevicesCommand {
         name: Option<String>,
     },
     #[command(about = i18n::m("Revoke a device and re-encrypt so it can never open the vault again", "吊销一台设备并重新加密，使其再也解不开"))]
-    Rm { name: String },
-    Rename { old: String, new: String },
+    Rm {
+        name: String,
+    },
+    Rename {
+        old: String,
+        new: String,
+    },
     #[command(about = i18n::m("Approve a recipient (a name or an age1… public key) and encrypt the current vault to it", "批准一个收件人（名字或 age1… 公钥），并立刻把当前金库加密给它"))]
-    Trust { key: String },
+    Trust {
+        key: String,
+    },
     #[command(about = i18n::m("Withdraw approval for a recipient", "撤回对某个收件人的批准"))]
-    Untrust { key: String },
+    Untrust {
+        key: String,
+    },
 }
 
 #[derive(Debug, Args)]

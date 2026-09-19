@@ -58,7 +58,11 @@ pub fn conflict_copy_id(id: Ulid, updated_at: DateTime<Utc>, value_hash: [u8; 32
     hasher.update(id.to_bytes());
     // The timestamp enters the hash at RFC3339 nanosecond precision: once `vault.age` is decrypted
     // both devices see the same JSON, so a lossless round trip (chrono's serde codec) keeps the digest bit-identical.
-    hasher.update(updated_at.to_rfc3339_opts(SecondsFormat::Nanos, true).as_bytes());
+    hasher.update(
+        updated_at
+            .to_rfc3339_opts(SecondsFormat::Nanos, true)
+            .as_bytes(),
+    );
     hasher.update(value_hash);
     let digest = hasher.finalize();
     let mut bytes = [0u8; 16];
@@ -182,11 +186,7 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
 }
 
 /// Merge rules aligned by entry ID (a clause-by-clause implementation of `REQUIREMENTS.md` §11.1).
-fn resolve_entry(
-    base: Option<&Entry>,
-    ours: Option<&Entry>,
-    theirs: Option<&Entry>,
-) -> Resolution {
+fn resolve_entry(base: Option<&Entry>, ours: Option<&Entry>, theirs: Option<&Entry>) -> Resolution {
     match (base, ours, theirs) {
         // On neither side: it can only come from base — both sides dropped it (its tombstone aged past 90 days after `rm --purge`).
         (_, None, None) => Resolution::Drop,
@@ -309,11 +309,7 @@ fn merge_token(base: Option<&TokenMeta>, ours: &TokenMeta, theirs: &TokenMeta) -
 }
 
 /// Count the actions that really happened relative to the local workspace: added / updated / removed / conflicted.
-fn stats_against(
-    ours: &Vault,
-    merged: &BTreeMap<Ulid, Entry>,
-    conflicts: usize,
-) -> MergeStats {
+fn stats_against(ours: &Vault, merged: &BTreeMap<Ulid, Entry>, conflicts: usize) -> MergeStats {
     let added = merged
         .keys()
         .filter(|id| !ours.entries.contains_key(id))
@@ -338,7 +334,7 @@ fn stats_against(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault::model::{is_valid_name, Category, Field, FieldType};
+    use crate::vault::model::{Category, Field, FieldType, is_valid_name};
 
     fn ts(secs: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(secs, 0).expect("in-range test timestamp")
@@ -521,7 +517,10 @@ mod tests {
         assert_eq!(r.conflicts.len(), 1);
         let conflict = &r.conflicts[0];
         assert_eq!(conflict.id, id(1));
-        assert_eq!(conflict.name, "openai", "the conflict is anchored on the original entry's name");
+        assert_eq!(
+            conflict.name, "openai",
+            "the conflict is anchored on the original entry's name"
+        );
         assert_eq!(conflict.kind, ConflictKind::ValueDiverged);
 
         // ours stays under the original ID, with the newer updated_at
@@ -549,7 +548,10 @@ mod tests {
             &vault(vec![original.clone()]),
         );
 
-        assert!(r.conflicts.is_empty(), "the remote did not edit, so the deletion takes effect directly");
+        assert!(
+            r.conflicts.is_empty(),
+            "the remote did not edit, so the deletion takes effect directly"
+        );
         assert!(r.vault.entries[&id(1)].is_deleted());
         assert_eq!(r.vault.entries[&id(1)], removal);
     }
@@ -579,7 +581,10 @@ mod tests {
             &vault(vec![theirs_entry.clone(), base.entries[&id(9)].clone()]),
         );
 
-        assert!(r.conflicts.is_empty(), "edits to different entries must merge automatically");
+        assert!(
+            r.conflicts.is_empty(),
+            "edits to different entries must merge automatically"
+        );
         assert_eq!(r.vault.entries.len(), 3);
         assert_eq!(r.vault.entries.get(&id(1)), Some(&ours_entry));
         assert_eq!(r.vault.entries.get(&id(2)), Some(&theirs_entry));
@@ -594,8 +599,12 @@ mod tests {
         let (base, ours, theirs) = rich_fixture();
         let expected = serde_json::to_string(&merge3(&base, &ours, &theirs)).expect("serializable");
         for round in 0..100 {
-            let again = serde_json::to_string(&merge3(&base, &ours, &theirs)).expect("serializable");
-            assert_eq!(again, expected, "merge #{round} is not byte-identical to the first");
+            let again =
+                serde_json::to_string(&merge3(&base, &ours, &theirs)).expect("serializable");
+            assert_eq!(
+                again, expected,
+                "merge #{round} is not byte-identical to the first"
+            );
         }
     }
 
@@ -608,7 +617,9 @@ mod tests {
         let a = merge3(&base, &ours, &theirs);
         // Device C merges independently: its local version differs from A's, but the remote version it holds is the same one
         let mut other_local = ours.clone();
-        other_local.entries.insert(id(1), with_value(&source, "third-device", 4_000));
+        other_local
+            .entries
+            .insert(id(1), with_value(&source, "third-device", 4_000));
         let c = merge3(&base, &other_local, &theirs);
 
         let expected = conflict_copy_id(source.id, source.updated_at, source.value_hash());
@@ -622,7 +633,10 @@ mod tests {
             c.vault.entries[&expected].name,
             a.vault.entries[&expected].name
         );
-        assert_ne!(expected, source.id, "a copy ID colliding with the original ID would overwrite the original entry outright");
+        assert_ne!(
+            expected, source.id,
+            "a copy ID colliding with the original ID would overwrite the original entry outright"
+        );
 
         // The devices only ever see the remote version through `vault.age` JSON, so the round trip must be lossless
         let reread: Entry =
@@ -637,7 +651,8 @@ mod tests {
         let retry = merge3(&base, &ours, &theirs);
         assert_eq!(retry.vault, a.vault);
         assert_eq!(
-            retry.vault
+            retry
+                .vault
                 .entries
                 .values()
                 .filter(|e| e.tags.iter().any(|t| t == CONFLICT_TAG))
@@ -661,7 +676,11 @@ mod tests {
         assert_eq!(conflict.id, id(1));
         assert!(r.vault.entries[&id(1)].is_deleted());
         let copy = &r.vault.entries[&conflict.conflict_id];
-        assert_eq!(value_of(copy), "v2", "the edit must not be dropped silently");
+        assert_eq!(
+            value_of(copy),
+            "v2",
+            "the edit must not be dropped silently"
+        );
         assert!(!copy.is_deleted());
 
         // The reverse: local edit vs remote delete → the edit stays on the original ID, the deletion decision goes in the conflict
@@ -670,7 +689,10 @@ mod tests {
         assert_eq!(r2.conflicts[0].kind, ConflictKind::DeleteVsEdit);
         assert_eq!(value_of(&r2.vault.entries[&id(1)]), "v2");
         let copy2 = &r2.vault.entries[&r2.conflicts[0].conflict_id];
-        assert!(copy2.is_deleted(), "the remote soft-delete decision must not be dropped silently either");
+        assert!(
+            copy2.is_deleted(),
+            "the remote soft-delete decision must not be dropped silently either"
+        );
     }
 
     #[test]
@@ -683,7 +705,10 @@ mod tests {
         theirs.purged.insert(id(1), ts(1_500));
 
         let r = merge3(&base, &ours, &theirs);
-        assert!(!r.vault.entries.contains_key(&id(1)), "a tombstone must not be revived");
+        assert!(
+            !r.vault.entries.contains_key(&id(1)),
+            "a tombstone must not be revived"
+        );
         assert_eq!(r.vault.purged.get(&id(1)), Some(&ts(1_500)));
         assert!(r.conflicts.is_empty(), "a purged entry is not a conflict");
         assert_eq!(r.stats.removed, 1);
@@ -709,8 +734,10 @@ mod tests {
     fn identical_three_way_merge_is_a_no_op() {
         let mut v = Vault::default();
         v.entries.insert(id(1), entry(id(1), "openai", "v0", 1_000));
-        v.entries.insert(id(2), deleted(&entry(id(2), "gone", "v1", 1_100), 1_200));
-        v.tokens.insert(id(3), token(&entry(id(3), "ci", "v2", 1_300)));
+        v.entries
+            .insert(id(2), deleted(&entry(id(2), "gone", "v1", 1_100), 1_200));
+        v.tokens
+            .insert(id(3), token(&entry(id(3), "ci", "v2", 1_300)));
         v.purged.insert(id(4), ts(900));
 
         let r = merge3(&v, &v, &v);
@@ -810,9 +837,17 @@ mod tests {
             &token_vault(vec![revoked]),
             &token_vault(vec![used]),
         );
-        let merged = r.vault.tokens.get(&id(5)).expect("the token must not disappear");
+        let merged = r
+            .vault
+            .tokens
+            .get(&id(5))
+            .expect("the token must not disappear");
         assert_eq!(merged.revoked_at, Some(ts(3_000)));
-        assert_eq!(merged.last_used_at, Some(ts(4_000)), "the newer use time must be kept");
+        assert_eq!(
+            merged.last_used_at,
+            Some(ts(4_000)),
+            "the newer use time must be kept"
+        );
 
         // Neither revokes → take the newer last_used_at, and both devices compute the same thing
         let mut older = base_token.clone();
@@ -820,7 +855,11 @@ mod tests {
         let mut newer = base_token.clone();
         newer.last_used_at = Some(ts(6_000));
         let empty = Vault::default();
-        let a = merge3(&empty, &token_vault(vec![older.clone()]), &token_vault(vec![newer.clone()]));
+        let a = merge3(
+            &empty,
+            &token_vault(vec![older.clone()]),
+            &token_vault(vec![newer.clone()]),
+        );
         let b = merge3(&empty, &token_vault(vec![newer]), &token_vault(vec![older]));
         assert_eq!(a.vault, b.vault);
         assert_eq!(a.vault.tokens[&id(5)].last_used_at, Some(ts(6_000)));
@@ -881,7 +920,8 @@ mod tests {
             dropped.clone(),
             shared.clone(),
         ]);
-        base.tokens.insert(id(7), token(&entry(id(7), "ci", "v0", 900)));
+        base.tokens
+            .insert(id(7), token(&entry(id(7), "ci", "v0", 900)));
 
         let mut ours = vault(vec![
             with_value(&mutable, "ours", 2_000),
@@ -892,7 +932,8 @@ mod tests {
             shared.clone(),
             entry(id(2), "only-ours", "x", 2_100),
         ]);
-        ours.tokens.insert(id(7), token(&entry(id(7), "ci", "v0", 900)));
+        ours.tokens
+            .insert(id(7), token(&entry(id(7), "ci", "v0", 900)));
 
         let mut theirs = vault(vec![
             with_value(&mutable, "theirs", 3_000),

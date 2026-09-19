@@ -27,7 +27,11 @@ fn json_success_is_a_single_ok_envelope_on_stdout() {
 
     // stdout must be **one** JSON document, with no diagnostics mixed in.
     let raw = device.stdout(&["--json", "list"]);
-    assert_eq!(raw.trim().lines().count(), 1, "stdout must be one JSON document");
+    assert_eq!(
+        raw.trim().lines().count(),
+        1,
+        "stdout must be one JSON document"
+    );
 }
 
 #[test]
@@ -48,7 +52,10 @@ fn human_mode_keeps_diagnostics_off_stdout() {
     let out = device.run(&["get", "no-such-entry"]);
     assert_eq!(out.status.code(), Some(3));
     assert!(out.stdout.is_empty());
-    assert!(!out.stderr.is_empty(), "human mode must explain the failure on stderr");
+    assert!(
+        !out.stderr.is_empty(),
+        "human mode must explain the failure on stderr"
+    );
 }
 
 // --------------------------------------------------------------- exit codes
@@ -65,7 +72,11 @@ fn exit_codes_match_the_documented_contract() {
     assert_eq!(device.expect_failure(&["get", "ghost"]).0, 3, "not_found");
 
     let empty = Device::blank();
-    assert_eq!(empty.expect_failure(&["list"]).0, 4, "locked: no identity yet");
+    assert_eq!(
+        empty.expect_failure(&["list"]).0,
+        4,
+        "locked: no identity yet"
+    );
 
     let out = device
         .command()
@@ -195,9 +206,16 @@ fn token_scope_cannot_be_bypassed_by_injection() {
         .output()
         .unwrap();
 
-    assert_eq!(out.status.code(), Some(8), "scope must apply to injection too");
+    assert_eq!(
+        out.status.code(),
+        Some(8),
+        "scope must apply to injection too"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(!stdout.contains(CANARY), "secret escaped through run: {stdout}");
+    assert!(
+        !stdout.contains(CANARY),
+        "secret escaped through run: {stdout}"
+    );
 
     // In-scope entries can still be injected.
     let out = device
@@ -214,7 +232,11 @@ fn token_scope_cannot_be_bypassed_by_injection() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -238,11 +260,18 @@ fn export_under_a_token_only_covers_the_scope() {
         .args(["--json", "export", "--as", "json", "--yes"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
 
     assert!(stdout.contains("anthropic"));
-    assert!(!stdout.contains(CANARY), "export leaked an out-of-scope entry");
+    assert!(
+        !stdout.contains(CANARY),
+        "export leaked an out-of-scope entry"
+    );
 }
 
 /// A capability token is a read-only credential — **including being unable to change the
@@ -289,7 +318,10 @@ fn a_scoped_token_cannot_mutate_admin_state() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, vec!["narrow"]);
-    assert!(!device.repo().join("recovery.age").exists(), "no backdoor passphrase");
+    assert!(
+        !device.repo().join("recovery.age").exists(),
+        "no backdoor passphrase"
+    );
 }
 
 fn entry_names(device: &Device) -> Vec<String> {
@@ -318,7 +350,11 @@ fn inject_cannot_route_around_a_global_reveal_ban() {
     let template = "token=akey://openai/credential\n";
 
     let out = device.run_with_stdin_env(&["inject"], template, &[("AKEY_NO_REVEAL", "1")]);
-    assert_eq!(out.status.code(), Some(7), "AKEY_NO_REVEAL must cover inject");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "AKEY_NO_REVEAL must cover inject"
+    );
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains(CANARY),
         "plaintext escaped through inject"
@@ -336,7 +372,11 @@ fn inject_cannot_route_around_a_deny_reveal_token() {
         "token=akey://openai/credential\n",
         &[("AKEY_TOKEN", token)],
     );
-    assert_eq!(out.status.code(), Some(7), "a deny-reveal token must cover inject");
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "a deny-reveal token must cover inject"
+    );
     assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
 }
 
@@ -394,13 +434,19 @@ fn export_refuses_entries_marked_reveal_deny() {
     device.json_ok(&["edit", "quiet", "--reveal-policy", "deny"]);
 
     let (code, kind, stdout) = device.expect_failure(&["export", "--as", "json", "--yes"]);
-    assert_eq!(code, 7, "export must not carry reveal=deny entries out in the clear");
+    assert_eq!(
+        code, 7,
+        "export must not carry reveal=deny entries out in the clear"
+    );
     assert_eq!(kind, "denied");
     assert!(stdout.is_empty());
 
     // The hint names which entry — otherwise the user has no way in.
     let stderr = device.stderr(&["export", "--as", "json", "--yes"]);
-    assert!(stderr.contains("quiet"), "the error must name the offending entry");
+    assert!(
+        stderr.contains("quiet"),
+        "the error must name the offending entry"
+    );
 
     // It only lets it through after an explicit change back to allow, and that is a **deliberate** step.
     device.json_ok(&["edit", "quiet", "--reveal-policy", "allow"]);
@@ -413,8 +459,14 @@ fn get_conceals_secrets_and_exposes_references_instead() {
     let data = device.json_ok(&["get", "openai"]);
     let rendered = serde_json::to_string(&data).unwrap();
 
-    assert!(!rendered.contains(CANARY), "concealed value leaked: {rendered}");
-    assert!(rendered.contains("********"), "expected a redaction placeholder");
+    assert!(
+        !rendered.contains(CANARY),
+        "concealed value leaked: {rendered}"
+    );
+    assert!(
+        rendered.contains("********"),
+        "expected a redaction placeholder"
+    );
     assert!(
         rendered.contains("akey://default/openai/credential"),
         "fields must carry a reference so an agent can point at a secret \
@@ -441,7 +493,11 @@ fn list_never_carries_field_values() {
 fn entry_can_be_pinned_to_deny_reveal() {
     let device = with_entry();
     let out = device.run(&["edit", "openai", "--reveal-policy", "deny"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let (code, kind, _) = device.expect_failure(&["read", "akey://openai/credential"]);
     assert_eq!(code, 7);
@@ -464,7 +520,11 @@ fn run_injects_a_secret_into_the_child_and_masks_any_echo() {
         "-c",
         "test -n \"$OPENAI_API_KEY\"",
     ]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // 2. Echoing from the child is masked, so plaintext never reaches the caller's stdout.
     let out = device.run(&[
@@ -478,7 +538,10 @@ fn run_injects_a_secret_into_the_child_and_masks_any_echo() {
     ]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains(CANARY), "secret reached stdout: {stdout}");
-    assert!(stdout.contains("concealed by akey"), "expected masking: {stdout}");
+    assert!(
+        stdout.contains("concealed by akey"),
+        "expected masking: {stdout}"
+    );
 }
 
 #[test]
@@ -492,7 +555,11 @@ fn run_passes_through_the_child_exit_code() {
 fn run_reads_references_out_of_an_env_file() {
     let device = with_entry();
     let env_file = device.workspace.path().join(".env");
-    std::fs::write(&env_file, "DB_PASSWORD=akey://openai/credential\n# a comment\n").unwrap();
+    std::fs::write(
+        &env_file,
+        "DB_PASSWORD=akey://openai/credential\n# a comment\n",
+    )
+    .unwrap();
 
     let out = device.run(&[
         "run",
@@ -503,7 +570,11 @@ fn run_reads_references_out_of_an_env_file() {
         "-c",
         "test -n \"$DB_PASSWORD\"",
     ]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -520,7 +591,11 @@ fn inject_renders_a_template_without_printing_to_the_caller() {
         "-o",
         output.to_str().unwrap(),
     ]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(std::fs::read_to_string(&output).unwrap().contains(CANARY));
     assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
 }
@@ -543,14 +618,25 @@ fn init_ships_agent_documentation_into_the_vault_repo() {
     let device = Device::initialized("testbox");
     let doc = std::fs::read_to_string(device.repo().join("AGENTS.md"))
         .expect("init must write AGENTS.md so a fresh agent can self-serve");
-    assert!(doc.contains("akey run"), "the doc should teach the injection pattern");
+    assert!(
+        doc.contains("akey run"),
+        "the doc should teach the injection pattern"
+    );
 }
 
 #[test]
 fn schema_is_machine_readable_and_complete() {
     let device = Device::initialized("testbox");
     let data = device.json_ok(&["schema"]);
-    for key in ["name", "version", "global_flags", "env_vars", "exit_codes", "reference", "commands"] {
+    for key in [
+        "name",
+        "version",
+        "global_flags",
+        "env_vars",
+        "exit_codes",
+        "reference",
+        "commands",
+    ] {
         assert!(data.get(key).is_some(), "schema is missing '{key}'");
     }
     let commands = data["commands"].as_array().unwrap();
@@ -689,10 +775,23 @@ fn documents_round_trip_binary_payloads() {
     let source = device.workspace.path().join("kubeconfig.bin");
     std::fs::write(&source, &payload).unwrap();
 
-    device.json_ok(&["doc", "put", "openai", source.to_str().unwrap(), "--field", "kubeconfig"]);
+    device.json_ok(&[
+        "doc",
+        "put",
+        "openai",
+        source.to_str().unwrap(),
+        "--field",
+        "kubeconfig",
+    ]);
 
     let restored = device.workspace.path().join("restored.bin");
-    device.json_ok(&["doc", "get", "akey://openai/kubeconfig", "-o", restored.to_str().unwrap()]);
+    device.json_ok(&[
+        "doc",
+        "get",
+        "akey://openai/kubeconfig",
+        "-o",
+        restored.to_str().unwrap(),
+    ]);
     assert_eq!(std::fs::read(&restored).unwrap(), payload, "byte-for-byte");
 }
 
@@ -705,15 +804,30 @@ fn export_needs_yes_and_import_round_trips() {
     assert_eq!(kind, "usage");
 
     let dump = device.workspace.path().join("dump.json");
-    device.json_ok(&["export", "--as", "json", "--yes", "-o", dump.to_str().unwrap()]);
+    device.json_ok(&[
+        "export",
+        "--as",
+        "json",
+        "--yes",
+        "-o",
+        dump.to_str().unwrap(),
+    ]);
 
     let other = Device::initialized("other");
     other.json_ok(&["import", "--as", "json", "-i", dump.to_str().unwrap()]);
 
     // A name clash must be blocked; only --merge lets it through.
-    let (code, _, _) = other.expect_failure(&["import", "--as", "json", "-i", dump.to_str().unwrap()]);
+    let (code, _, _) =
+        other.expect_failure(&["import", "--as", "json", "-i", dump.to_str().unwrap()]);
     assert_eq!(code, 2);
-    other.json_ok(&["import", "--as", "json", "-i", dump.to_str().unwrap(), "--merge"]);
+    other.json_ok(&[
+        "import",
+        "--as",
+        "json",
+        "-i",
+        dump.to_str().unwrap(),
+        "--merge",
+    ]);
 
     assert!(
         other
@@ -745,7 +859,11 @@ fn mcp_speaks_json_rpc_and_never_returns_values() {
         .collect();
 
     // One of the 6 requests is a notification, which per JSON-RPC must not be answered.
-    assert_eq!(replies.len(), 5, "notifications must not be answered: {stdout}");
+    assert_eq!(
+        replies.len(),
+        5,
+        "notifications must not be answered: {stdout}"
+    );
 
     let by_id = |id: i64| {
         replies
@@ -758,10 +876,7 @@ fn mcp_speaks_json_rpc_and_never_returns_values() {
     assert_eq!(by_id(5)["error"]["code"], -32601, "unknown method");
 
     // The security floor: this channel never leaks field values.
-    assert!(
-        !stdout.contains(CANARY),
-        "MCP leaked a secret: {stdout}"
-    );
+    assert!(!stdout.contains(CANARY), "MCP leaked a secret: {stdout}");
 }
 
 #[test]
@@ -770,7 +885,10 @@ fn completion_emits_a_shell_script() {
     for shell in ["bash", "zsh", "fish"] {
         let script = device.stdout(&["completion", shell]);
         assert!(!script.trim().is_empty(), "{shell} completion is empty");
-        assert!(script.contains("akey"), "{shell} completion does not mention akey");
+        assert!(
+            script.contains("akey"),
+            "{shell} completion does not mention akey"
+        );
     }
 }
 
@@ -792,7 +910,11 @@ fn recovery_rotate_changes_the_passphrase_non_interactively() {
         &["recovery", "unlock"],
         &[("AKEY_RECOVERY_PASSPHRASE", "the-first-passphrase")],
     );
-    assert_eq!(old.status.code(), Some(4), "the old passphrase must stop working");
+    assert_eq!(
+        old.status.code(),
+        Some(4),
+        "the old passphrase must stop working"
+    );
 
     device.run_ok_with_env(
         &["recovery", "unlock"],
@@ -822,7 +944,11 @@ fn a_weak_recovery_passphrase_is_refused_from_any_source() {
 
     // The environment-variable path used to bypass the length check, allowing a single-character passphrase.
     let out = device.run_with_env(&["recovery", "set"], &[("AKEY_RECOVERY_PASSPHRASE", "a")]);
-    assert_eq!(out.status.code(), Some(2), "1-character passphrase must be refused");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "1-character passphrase must be refused"
+    );
     assert!(String::from_utf8_lossy(&out.stderr).contains("at least"));
 
     let out = device.run_with_env(
@@ -832,7 +958,11 @@ fn a_weak_recovery_passphrase_is_refused_from_any_source() {
             ("AKEY_NEW_RECOVERY_PASSPHRASE", "b"),
         ],
     );
-    assert_eq!(out.status.code(), Some(2), "rotate must refuse a weak replacement too");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "rotate must refuse a weak replacement too"
+    );
 }
 
 #[test]
@@ -898,7 +1028,10 @@ fn set_repeated_with_the_same_value_is_a_no_op() {
         after["updated_at"], before["updated_at"],
         "writing an identical value is not a change"
     );
-    assert_eq!(after["fields"], before["fields"], "fields must not accumulate");
+    assert_eq!(
+        after["fields"], before["fields"],
+        "fields must not accumulate"
+    );
     assert_eq!(device.json_ok(&["list"])["count"], 1);
 }
 
@@ -913,12 +1046,17 @@ fn doctor_json_reports_every_probe_with_a_known_status() {
     let checks = data["checks"]
         .as_array()
         .expect("doctor must report a list of checks");
-    assert!(!checks.is_empty(), "a doctor that checks nothing is not a doctor");
+    assert!(
+        !checks.is_empty(),
+        "a doctor that checks nothing is not a doctor"
+    );
 
     let mut names = Vec::new();
     for check in checks {
         let name = check["name"].as_str().expect("every check needs a name");
-        let status = check["status"].as_str().expect("every check needs a status");
+        let status = check["status"]
+            .as_str()
+            .expect("every check needs a status");
         assert!(
             ["ok", "warning", "error"].contains(&status),
             "{name} reports an unknown status {status:?}"
@@ -972,7 +1110,10 @@ fn language_changes_human_text_and_leaves_the_json_contract_untouched() {
     let out = device.run(&["--lang", "fr", "list"]);
     assert_eq!(out.status.code(), Some(2), "usage error");
     assert!(!out.stderr.is_empty());
-    assert!(out.stdout.is_empty(), "a failing command writes nothing to stdout");
+    assert!(
+        out.stdout.is_empty(),
+        "a failing command writes nothing to stdout"
+    );
 }
 
 /// Hints are localized; the error code they accompany is not.
@@ -991,8 +1132,8 @@ fn error_hints_follow_the_language_while_the_code_stays_stable() {
         .to_string();
     assert!(zh.contains("查看可选条目"), "hint not localized:\n{zh}");
 
-    let en = String::from_utf8_lossy(&device.run(&["--lang", "en", "get", "ghost"]).stderr)
-        .to_string();
+    let en =
+        String::from_utf8_lossy(&device.run(&["--lang", "en", "get", "ghost"]).stderr).to_string();
     assert!(en.contains("see available entries"), "english hint:\n{en}");
 }
 

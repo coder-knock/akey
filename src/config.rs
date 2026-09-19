@@ -70,8 +70,8 @@ impl Config {
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
         paths.ensure()?;
-        let rendered = toml::to_string_pretty(self)
-            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        let rendered =
+            toml::to_string_pretty(self).map_err(|e| Error::Io(std::io::Error::other(e)))?;
         paths::atomic_write(&paths.config, rendered.as_bytes(), paths::FILE_MODE)
     }
 
@@ -155,7 +155,11 @@ mod tests {
         let back = Config::load(&paths).unwrap();
         assert_eq!(back, config);
 
-        let mode = std::fs::metadata(&paths.config).unwrap().permissions().mode() & 0o777;
+        let mode = std::fs::metadata(&paths.config)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, paths::FILE_MODE);
     }
 
@@ -171,7 +175,8 @@ mod tests {
     #[test]
     fn remote_defaults_to_absent_and_reveal_defaults_to_allowed() {
         let (_guard, paths) = setup();
-        let rendered = "repo = \"/tmp/r\"\ndevice_name = \"d\"\ncreated_at = \"2026-09-19T00:00:00Z\"\n";
+        let rendered =
+            "repo = \"/tmp/r\"\ndevice_name = \"d\"\ncreated_at = \"2026-09-19T00:00:00Z\"\n";
         write_config(&paths, rendered);
 
         let config = Config::load(&paths).unwrap();

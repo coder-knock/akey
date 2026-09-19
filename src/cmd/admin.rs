@@ -24,7 +24,7 @@ use crate::sync::Git;
 use crate::vault::model::{Vault, is_valid_name};
 use crate::vault::recipients::{RecipientKind, Recipients};
 use crate::vault::store::{
-    Store, AGENTS_FILE, RECIPIENTS_FILE, RECOVERY_FILE, SYNCED_FILES, VAULT_FILE,
+    AGENTS_FILE, RECIPIENTS_FILE, RECOVERY_FILE, SYNCED_FILES, Store, VAULT_FILE,
 };
 
 /// Minimum recovery-passphrase length. It is the vault's last resort, so do not let it
@@ -185,12 +185,7 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
     identity.save(&ctx.paths.identity)?;
 
     let mut recipients = Recipients::default();
-    recipients.add(
-        &identity.pubkey(),
-        &device_name,
-        RecipientKind::Device,
-        now,
-    );
+    recipients.add(&identity.pubkey(), &device_name, RecipientKind::Device, now);
     recipients.save(&repo.join(RECIPIENTS_FILE))?;
 
     let vault = Vault::default();
@@ -220,7 +215,10 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
     git.add_paths(SYNCED_FILES)?;
     git.commit("akey: initialize vault")?;
 
-    let mut steps = vec!["created device identity".to_string(), "created vault".to_string()];
+    let mut steps = vec![
+        "created device identity".to_string(),
+        "created vault".to_string(),
+    ];
 
     if args.recovery {
         let passphrase = read_passphrase(true)?;
@@ -239,19 +237,14 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
                     "the remote {} already has commits; refusing to overwrite — \
                      use `akey init --from {}` to adopt it instead",
                     "远端 {} 已有提交；拒绝覆盖——请改用 `akey init --from {}` 接收它",
-                    remote, remote
+                    remote,
+                    remote
                 )));
             }
         }
     }
 
-    audit::record(
-        &ctx.paths,
-        &device_name,
-        Action::Init,
-        None,
-        "ok",
-    )?;
+    audit::record(&ctx.paths, &device_name, Action::Init, None, "ok")?;
 
     ctx.out.emit(
         crate::msg!(
@@ -273,12 +266,7 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
     )
 }
 
-fn init_from_remote(
-    ctx: &Ctx,
-    args: &InitArgs,
-    url: &str,
-    passphrase: SecretString,
-) -> Result<()> {
+fn init_from_remote(ctx: &Ctx, args: &InitArgs, url: &str, passphrase: SecretString) -> Result<()> {
     ctx.paths.ensure()?;
     let now = Utc::now();
     let device_name = args.device.clone().unwrap_or_else(default_device_name);
@@ -305,38 +293,39 @@ fn init_from_remote(
             RECOVERY_FILE
         )));
     }
-    let recovered = crate::crypto::decrypt_with_passphrase(
-        &passphrase,
-        &fs::read(&recovery_path)?,
-    )?;
-    let recovery: RecoveryFile = serde_json::from_slice(&recovered)
-        .map_err(|e| Error::corrupt(crate::msg!(
+    let recovered =
+        crate::crypto::decrypt_with_passphrase(&passphrase, &fs::read(&recovery_path)?)?;
+    let recovery: RecoveryFile = serde_json::from_slice(&recovered).map_err(|e| {
+        Error::corrupt(crate::msg!(
             "{} is malformed: {}",
             "{} 格式不对：{}",
             RECOVERY_FILE,
             e
-        )))?;
+        ))
+    })?;
     let bootstrap = DeviceIdentity::parse(&recovery.bootstrap_identity, "bootstrap")?;
 
-    let vault_ciphertext = fs::read(repo.join(VAULT_FILE))
-        .map_err(|_| Error::corrupt(crate::msg!(
+    let vault_ciphertext = fs::read(repo.join(VAULT_FILE)).map_err(|_| {
+        Error::corrupt(crate::msg!(
             "{} is missing {}",
             "{} 缺少 {}",
             repo.display(),
             VAULT_FILE
-        )))?;
+        ))
+    })?;
     let vault_plain = bootstrap.decrypt(&vault_ciphertext).map_err(|_| {
         Error::locked(crate::msg!(
             "recovery passphrase decrypts the bootstrap key but not the vault",
             "恢复密码能解密引导密钥，但解不开金库"
         ))
     })?;
-    let vault: Vault = serde_json::from_slice(&vault_plain)
-        .map_err(|e| Error::corrupt(crate::msg!(
+    let vault: Vault = serde_json::from_slice(&vault_plain).map_err(|e| {
+        Error::corrupt(crate::msg!(
             "vault is not valid JSON: {}",
             "金库不是合法的 JSON：{}",
             e
-        )))?;
+        ))
+    })?;
 
     let identity = DeviceIdentity::generate(device_name.clone());
     identity.save(&ctx.paths.identity)?;
@@ -468,7 +457,9 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             // A token is a read-only credential: changing the recipient set changes the
             // cryptographic boundary, so it must use the local device identity.
             ctx.gate_write()?;
-            let name = name.clone().unwrap_or_else(|| store.config.device_name.clone());
+            let name = name
+                .clone()
+                .unwrap_or_else(|| store.config.device_name.clone());
             if ctx.dry_run {
                 return ctx.out.emit(
                     crate::msg!(
@@ -493,7 +484,13 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             let git = git_for(&store);
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: re-add device {name}"))?;
-            audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
+            audit::record(
+                &ctx.paths,
+                store.identity.name(),
+                Action::DeviceAdd,
+                Some(&name),
+                "ok",
+            )?;
             ctx.out.emit(
                 crate::msg!(
                     "device '{}' is now an active, trusted recipient",
@@ -548,7 +545,13 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: revoke device {name}"))?;
             let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
-            audit::record(&ctx.paths, store.identity.name(), Action::DeviceRemove, Some(name), "ok")?;
+            audit::record(
+                &ctx.paths,
+                store.identity.name(),
+                Action::DeviceRemove,
+                Some(name),
+                "ok",
+            )?;
             ctx.out.emit(
                 crate::msg!(
                     "revoked '{}' and re-encrypted the vault",
@@ -570,13 +573,13 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             }
             store.with_lock(|store| {
                 let mut recipients = store.load_recipients()?;
-                let (pubkey, _) = recipients
-                    .find_by_name(old)
-                    .ok_or_else(|| Error::not_found(crate::msg!(
+                let (pubkey, _) = recipients.find_by_name(old).ok_or_else(|| {
+                    Error::not_found(crate::msg!(
                         "no device named '{}'",
                         "没有名为 '{}' 的设备",
                         old
-                    )))?;
+                    ))
+                })?;
                 let pubkey = pubkey.clone();
                 let mut record = recipients
                     .recipients
@@ -632,7 +635,13 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: trust device {name}"))?;
             let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
-            audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
+            audit::record(
+                &ctx.paths,
+                store.identity.name(),
+                Action::DeviceAdd,
+                Some(&name),
+                "ok",
+            )?;
             ctx.out.emit(
                 crate::msg!(
                     "'{}' is trusted and can now decrypt the vault",
@@ -698,13 +707,13 @@ fn resolve_recipient(recipients: &Recipients, key: &str) -> Result<(String, Stri
         })?;
         return Ok((key.to_string(), record.name.clone()));
     }
-    let (pubkey, record) = recipients
-        .find_by_name(key)
-        .ok_or_else(|| Error::not_found(crate::msg!(
+    let (pubkey, record) = recipients.find_by_name(key).ok_or_else(|| {
+        Error::not_found(crate::msg!(
             "no recipient named '{}'",
             "没有名为 '{}' 的收件人",
             key
-        )))?;
+        ))
+    })?;
     Ok((pubkey.clone(), record.name.clone()))
 }
 
@@ -847,17 +856,16 @@ fn decrypt_recovery(store: &Store, passphrase: &SecretString) -> Result<Recovery
             "没有配置恢复密码；请先运行 `akey recovery set`"
         )));
     }
-    let plaintext = crate::crypto::decrypt_with_passphrase(
-        passphrase,
-        &fs::read(store.recovery_path())?,
-    )?;
-    serde_json::from_slice(&plaintext)
-        .map_err(|e| Error::corrupt(crate::msg!(
+    let plaintext =
+        crate::crypto::decrypt_with_passphrase(passphrase, &fs::read(store.recovery_path())?)?;
+    serde_json::from_slice(&plaintext).map_err(|e| {
+        Error::corrupt(crate::msg!(
             "{} is malformed: {}",
             "{} 格式不对：{}",
             RECOVERY_FILE,
             e
-        )))
+        ))
+    })
 }
 
 // ---------------------------------------------------------------- token
@@ -915,7 +923,13 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             let git = git_for(&store);
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: issue token {name}"))?;
-            audit::record(&ctx.paths, store.identity.name(), Action::TokenIssue, Some(name), "ok")?;
+            audit::record(
+                &ctx.paths,
+                store.identity.name(),
+                Action::TokenIssue,
+                Some(name),
+                "ok",
+            )?;
 
             ctx.out.emit(
                 crate::msg!(
@@ -987,11 +1001,13 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
                     .tokens
                     .values()
                     .find(|t| &t.name == name)
-                    .ok_or_else(|| Error::not_found(crate::msg!(
-                        "no token named '{}'",
-                        "没有名为 '{}' 的令牌",
-                        name
-                    )))?;
+                    .ok_or_else(|| {
+                        Error::not_found(crate::msg!(
+                            "no token named '{}'",
+                            "没有名为 '{}' 的令牌",
+                            name
+                        ))
+                    })?;
                 let id = meta.id;
                 let meta = vault.tokens.get_mut(&id).expect("just found");
                 if meta.revoked_at.is_none() {
@@ -1002,7 +1018,13 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             let git = git_for(&store);
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: revoke token {name}"))?;
-            audit::record(&ctx.paths, store.identity.name(), Action::TokenRevoke, Some(name), "ok")?;
+            audit::record(
+                &ctx.paths,
+                store.identity.name(),
+                Action::TokenRevoke,
+                Some(name),
+                "ok",
+            )?;
             ctx.out.emit(
                 crate::msg!("token '{}' revoked", "令牌 '{}' 已吊销", name),
                 &serde_json::json!({ "name": name, "id": id.to_string(), "revoked": true }),
@@ -1084,7 +1106,10 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
             Ok(true) => push(
                 "identity_permissions",
                 "error",
-                format!("{} is readable by other users", ctx.paths.identity.display()),
+                format!(
+                    "{} is readable by other users",
+                    ctx.paths.identity.display()
+                ),
                 Some(crate::msg!(
                     "{} is readable by other users",
                     "{} 可被其他用户读取",
@@ -1105,9 +1130,7 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         );
     }
 
-    if ctx.paths.has_config()
-        && paths::permissions_exposed(&ctx.paths.config).unwrap_or(false)
-    {
+    if ctx.paths.has_config() && paths::permissions_exposed(&ctx.paths.config).unwrap_or(false) {
         push(
             "config_permissions",
             "error",
@@ -1142,16 +1165,23 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         remote
             .clone()
             .unwrap_or_else(|| "no remote; vault is local-only".into()),
-        remote
-            .is_none()
-            .then(|| crate::msg!("no remote; vault is local-only", "没有远端；金库仅存在于本地")),
+        remote.is_none().then(|| {
+            crate::msg!(
+                "no remote; vault is local-only",
+                "没有远端；金库仅存在于本地"
+            )
+        }),
     );
 
     let vault = store.load()?;
     push(
         "vault",
         "ok",
-        format!("{} entries, {} tokens", vault.entries.len(), vault.tokens.len()),
+        format!(
+            "{} entries, {} tokens",
+            vault.entries.len(),
+            vault.tokens.len()
+        ),
         Some(crate::msg!(
             "{} entries, {} tokens",
             "{} 个条目，{} 个令牌",
@@ -1162,7 +1192,10 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
 
     let recipients = store.load_recipients()?;
     let mine = store.identity.pubkey();
-    let active = recipients.recipients.iter().any(|(k, r)| k == &mine && r.is_active());
+    let active = recipients
+        .recipients
+        .iter()
+        .any(|(k, r)| k == &mine && r.is_active());
     push(
         "this_device_is_recipient",
         if active { "ok" } else { "error" },
@@ -1172,7 +1205,11 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
 
     push(
         "recovery",
-        if store.recovery_path().is_file() { "ok" } else { "warning" },
+        if store.recovery_path().is_file() {
+            "ok"
+        } else {
+            "warning"
+        },
         if store.recovery_path().is_file() {
             "recovery passphrase configured".into()
         } else {
@@ -1230,15 +1267,17 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
     let conflicts = crate::sync::pending_conflicts(&vault);
     push(
         "conflicts",
-        if conflicts.is_empty() { "ok" } else { "warning" },
+        if conflicts.is_empty() {
+            "ok"
+        } else {
+            "warning"
+        },
         if conflicts.is_empty() {
             "none".into()
         } else {
             conflicts.join(", ")
         },
-        conflicts
-            .is_empty()
-            .then(|| crate::msg!("none", "无")),
+        conflicts.is_empty().then(|| crate::msg!("none", "无")),
     );
 
     let expired_tokens: Vec<&str> = vault
@@ -1249,7 +1288,11 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         .collect();
     push(
         "tokens",
-        if expired_tokens.is_empty() { "ok" } else { "warning" },
+        if expired_tokens.is_empty() {
+            "ok"
+        } else {
+            "warning"
+        },
         if expired_tokens.is_empty() {
             "all active".into()
         } else {
@@ -1281,10 +1324,7 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
             .then(|| crate::msg!("nothing expiring in 30 days", "30 天内没有条目到期")),
     );
 
-    let problems = checks
-        .iter()
-        .filter(|c| c["status"] == "error")
-        .count();
+    let problems = checks.iter().filter(|c| c["status"] == "error").count();
     let human = table.join("\n");
 
     ctx.out.emit(
@@ -1302,7 +1342,11 @@ pub fn log(ctx: &Ctx, args: &LogArgs) -> Result<()> {
     let filtered: Vec<_> = records
         .into_iter()
         .filter(|r| cutoff.is_none_or(|c| r.ts >= c))
-        .filter(|r| args.item.as_deref().is_none_or(|i| r.subject.as_deref() == Some(i)))
+        .filter(|r| {
+            args.item
+                .as_deref()
+                .is_none_or(|i| r.subject.as_deref() == Some(i))
+        })
         .collect();
 
     let human = if filtered.is_empty() {
@@ -1322,7 +1366,8 @@ pub fn log(ctx: &Ctx, args: &LogArgs) -> Result<()> {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    ctx.out.emit(human, &serde_json::json!({ "records": filtered }))
+    ctx.out
+        .emit(human, &serde_json::json!({ "records": filtered }))
 }
 
 // ---------------------------------------------------------------- schema / completion
@@ -1519,7 +1564,11 @@ mod tests {
                 recipients.save(&store.recipients_path())
             })
             .unwrap();
-        assert!(stranger.decrypt(&fs::read(store.vault_path()).unwrap()).is_ok());
+        assert!(
+            stranger
+                .decrypt(&fs::read(store.vault_path()).unwrap())
+                .is_ok()
+        );
 
         store
             .with_lock(|store| {
@@ -1572,19 +1621,19 @@ mod tests {
         let store = ctx.store().unwrap();
 
         set_recovery(&ctx, SecretString::from("first-passphrase-here")).unwrap();
-        let payload = decrypt_recovery(&store, &SecretString::from("first-passphrase-here"))
-            .unwrap();
+        let payload =
+            decrypt_recovery(&store, &SecretString::from("first-passphrase-here")).unwrap();
         assert_eq!(payload.version, 1);
 
         // After the rotation the old passphrase stops working and the new one works.
-        write_recovery(&store, &payload, &SecretString::from("second-passphrase-here"))
-            .unwrap();
-        assert!(
-            decrypt_recovery(&store, &SecretString::from("first-passphrase-here")).is_err()
-        );
-        assert!(
-            decrypt_recovery(&store, &SecretString::from("second-passphrase-here")).is_ok()
-        );
+        write_recovery(
+            &store,
+            &payload,
+            &SecretString::from("second-passphrase-here"),
+        )
+        .unwrap();
+        assert!(decrypt_recovery(&store, &SecretString::from("first-passphrase-here")).is_err());
+        assert!(decrypt_recovery(&store, &SecretString::from("second-passphrase-here")).is_ok());
     }
 
     #[test]
@@ -1596,8 +1645,7 @@ mod tests {
 
         let store = ctx.store().unwrap();
         let payload =
-            decrypt_recovery(&store, &SecretString::from("a-long-enough-passphrase"))
-                .unwrap();
+            decrypt_recovery(&store, &SecretString::from("a-long-enough-passphrase")).unwrap();
         let bootstrap = DeviceIdentity::parse(&payload.bootstrap_identity, "bootstrap").unwrap();
         assert!(
             bootstrap
@@ -1642,7 +1690,10 @@ mod tests {
         assert!(meta.expires_at.is_some());
         // The vault holds only the digest, never the plaintext.
         let raw = serde_json::to_string(&vault).unwrap();
-        assert!(!raw.contains("akey_"), "token plaintext leaked into the vault");
+        assert!(
+            !raw.contains("akey_"),
+            "token plaintext leaked into the vault"
+        );
     }
 
     #[test]
@@ -1670,7 +1721,11 @@ mod tests {
         // the machine-transfer path would break.
         let payload = decrypt_recovery(&store, &new).unwrap();
         let bootstrap = DeviceIdentity::parse(&payload.bootstrap_identity, "bootstrap").unwrap();
-        assert!(bootstrap.decrypt(&fs::read(store.vault_path()).unwrap()).is_ok());
+        assert!(
+            bootstrap
+                .decrypt(&fs::read(store.vault_path()).unwrap())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1709,13 +1764,15 @@ mod tests {
         );
 
         // Only the newest passphrase works, and it can open the vault.
-        assert!(
-            decrypt_recovery(&store, &SecretString::from("first-passphrase-here")).is_err()
-        );
+        assert!(decrypt_recovery(&store, &SecretString::from("first-passphrase-here")).is_err());
         let payload =
             decrypt_recovery(&store, &SecretString::from("second-passphrase-here")).unwrap();
         let bootstrap = DeviceIdentity::parse(&payload.bootstrap_identity, "bootstrap").unwrap();
-        assert!(bootstrap.decrypt(&fs::read(store.vault_path()).unwrap()).is_ok());
+        assert!(
+            bootstrap
+                .decrypt(&fs::read(store.vault_path()).unwrap())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1743,11 +1800,39 @@ mod tests {
             .map(|s| s.get_name().to_string())
             .collect();
         for expected in [
-            "init", "read", "run", "inject", "get", "set", "edit", "rm", "restore", "cp", "mv",
-            "list", "template", "doc", "token", "devices", "recovery", "sync", "conflicts",
-            "resolve", "log", "whoami", "doctor", "schema", "completion", "export", "import", "mcp",
+            "init",
+            "read",
+            "run",
+            "inject",
+            "get",
+            "set",
+            "edit",
+            "rm",
+            "restore",
+            "cp",
+            "mv",
+            "list",
+            "template",
+            "doc",
+            "token",
+            "devices",
+            "recovery",
+            "sync",
+            "conflicts",
+            "resolve",
+            "log",
+            "whoami",
+            "doctor",
+            "schema",
+            "completion",
+            "export",
+            "import",
+            "mcp",
         ] {
-            assert!(names.contains(&expected.to_string()), "missing command {expected}");
+            assert!(
+                names.contains(&expected.to_string()),
+                "missing command {expected}"
+            );
         }
     }
 }

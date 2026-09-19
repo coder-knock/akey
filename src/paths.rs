@@ -172,7 +172,6 @@ fn sync_dir(dir: &Path) {
 #[cfg(not(unix))]
 fn sync_dir(_dir: &Path) {}
 
-
 /// Verifies the file is owner-readable/writable only. Readable by other users is refused —
 /// an identity leak is a whole-vault leak.
 #[cfg(unix)]
@@ -209,10 +208,7 @@ pub fn ensure_private(path: &Path) -> Result<()> {
          identity private, so it refuses to use a shared location. Move it under {} or pass --home",
         "{} 不在你的用户配置目录内；在 Windows 上 akey 依赖配置文件 ACL 来保证身份私密，因此拒绝使用共享位置。请将它移动到 {} 下，或传入 --home",
         path.display(),
-        user_profile().map_or_else(
-            || "%USERPROFILE%".to_string(),
-            |p| p.display().to_string()
-        )
+        user_profile().map_or_else(|| "%USERPROFILE%".to_string(), |p| p.display().to_string())
     )))
 }
 
@@ -275,8 +271,14 @@ fn with_write_lock_timeout<T>(
     }
     // `truncate(false)`: the lock file carries no content, and truncating a file another
     // process holds open is a side effect for nothing.
-    let file = owner_only(OpenOptions::new().create(true).read(true).write(true).truncate(false))
-        .open(lock_path)?;
+    let file = owner_only(
+        OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false),
+    )
+    .open(lock_path)?;
     let mut lock = fd_lock::RwLock::new(file);
 
     let deadline = Instant::now() + timeout;
@@ -320,7 +322,10 @@ mod tests {
     fn ensure_creates_private_home() {
         let (_guard, paths) = temp_home();
         paths.ensure().unwrap();
-        assert!(paths.home.is_dir(), "ensure() must create the home directory");
+        assert!(
+            paths.home.is_dir(),
+            "ensure() must create the home directory"
+        );
         #[cfg(unix)]
         {
             let mode = fs::metadata(&paths.home).unwrap().permissions().mode() & 0o777;
@@ -337,7 +342,10 @@ mod tests {
             Some(profile),
             Path::new("/home/ada/.config/akey/identity.key")
         ));
-        assert!(!is_inside(Some(profile), Path::new("/shared/akey/identity.key")));
+        assert!(!is_inside(
+            Some(profile),
+            Path::new("/shared/akey/identity.key")
+        ));
         // A sibling whose *name* shares a prefix must not count: component-wise, not string-wise.
         assert!(!is_inside(
             Some(profile),

@@ -6,7 +6,7 @@ pub mod recipients;
 pub mod store;
 
 pub use model::{
-    Category, DEFAULT_VAULT, Entry, Field, FieldType, FORMAT_VERSION, Reveal, TokenMeta, Vault,
+    Category, DEFAULT_VAULT, Entry, FORMAT_VERSION, Field, FieldType, Reveal, TokenMeta, Vault,
 };
 pub use recipients::{RecipientKind, RecipientRecord, Recipients};
 pub use store::Store;

@@ -174,10 +174,8 @@ impl Ctx {
         }
         for text in texts {
             for raw in crate::reference::extract_references(text) {
-                let reference = crate::reference::Reference::parse_in(
-                    &raw,
-                    &|name| std::env::var(name).ok(),
-                )?;
+                let reference =
+                    crate::reference::Reference::parse_in(&raw, &|name| std::env::var(name).ok())?;
                 self.authorize(vault, &reference.item)?;
             }
         }
@@ -187,7 +185,9 @@ impl Ctx {
     /// The set of entry names inside the token's scope; `None` when there is no token or no
     /// restriction (= everything visible).
     pub fn scoped_names(&self, vault: &Vault) -> Result<Option<Vec<String>>> {
-        Ok(self.active_token(vault)?.and_then(|meta| meta.allow.clone()))
+        Ok(self
+            .active_token(vault)?
+            .and_then(|meta| meta.allow.clone()))
     }
 
     /// Diagnostic lines for `--debug`. Always on stderr, and they **report locations only**,
@@ -295,10 +295,7 @@ pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
     if raw.is_empty() {
         return Err(Error::usage(crate::msg!("empty duration", "时长为空")));
     }
-    let (digits, unit) = raw.split_at(
-        raw.find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(raw.len()),
-    );
+    let (digits, unit) = raw.split_at(raw.find(|c: char| !c.is_ascii_digit()).unwrap_or(raw.len()));
     let value: i64 = digits.parse().map_err(|_| {
         Error::usage(crate::msg!(
             "invalid duration '{}': expected e.g. 30d, 12h, 90s",
@@ -327,8 +324,9 @@ pub fn run() -> i32 {
     // Localize before parsing. `--help` is produced by the parse, so the language has to be
     // settled first — hence the argv pre-scan. Precedence is `--lang`, then `$AKEY_LANG`, then
     // the locale variables, then English.
-    match crate::i18n::Lang::resolve(crate::i18n::lang_from_argv(std::env::args().skip(1)).as_deref())
-    {
+    match crate::i18n::Lang::resolve(
+        crate::i18n::lang_from_argv(std::env::args().skip(1)).as_deref(),
+    ) {
         Ok(lang) => crate::i18n::set_lang(lang),
         Err(err) => {
             // Reported in English, because the request itself was for a language that does not
