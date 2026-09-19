@@ -108,7 +108,7 @@ mod tests {
         #[cfg(unix)]
         {
             #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+            use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(
                 &paths.config,
                 std::fs::Permissions::from_mode(paths::FILE_MODE),
@@ -119,6 +119,7 @@ mod tests {
 
     use super::*;
     use crate::paths::Paths;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn setup() -> (tempfile::TempDir, Paths) {
@@ -128,6 +129,8 @@ mod tests {
         (dir, paths)
     }
 
+    /// Only the unix-only permission test needs a fully-populated config to round-trip.
+    #[cfg(unix)]
     fn sample() -> Config {
         Config {
             repo: PathBuf::from("/tmp/vault-repo"),
@@ -139,6 +142,9 @@ mod tests {
         }
     }
 
+    /// The assertion *is* the mode bits, and Windows has none. The profile-location guard
+    /// that replaces it there is covered by `paths::profile_containment_*`.
+    #[cfg(unix)]
     #[test]
     fn round_trips_through_disk_with_private_permissions() {
         let (_guard, paths) = setup();

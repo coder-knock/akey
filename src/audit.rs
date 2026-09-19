@@ -1,11 +1,10 @@
-//! 审计日志：本地 append-only JSONL。
+//! Audit log: machine-local append-only JSONL.
 //!
-//! 记录**谁**（设备名）在**何时**对**哪个条目**做了**什么**以及结果。
-//! 绝不记录明文值——这是 NFR-9，有测试钉住。
+//! Records **who** (device name) did **what** to **which entry** **when**, plus the outcome.
+//! Plaintext values are never recorded — that is NFR-9, pinned by a test.
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -43,14 +42,14 @@ pub struct AuditRecord {
     pub ts: DateTime<Utc>,
     pub device: String,
     pub action: Action,
-    /// 条目名或设备名；不含值。
+    /// Entry name or device name; never the value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
-    /// `ok` / `denied` / 错误码。
+    /// `ok` / `denied` / an error code.
     pub outcome: String,
 }
 
-/// 追加一条记录。审计是 MUST（FR-12），写不进去就是真失败——不静默吞掉。
+/// Appends one record. Auditing is a MUST (FR-12); if it cannot be written that is a real failure — never silently swallowed.
 pub fn record(
     paths: &Paths,
     device: &str,
@@ -73,17 +72,14 @@ fn append(paths: &Paths, record: &AuditRecord) -> Result<()> {
     let mut line = serde_json::to_string(record).map_err(|e| Error::Io(std::io::Error::other(e)))?;
     line.push('\n');
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(paths::FILE_MODE)
-        .open(&paths.audit)?;
+    let mut file =
+        paths::owner_only(OpenOptions::new().create(true).append(true)).open(&paths.audit)?;
     file.write_all(line.as_bytes())?;
     file.sync_data()?;
     Ok(())
 }
 
-/// 读取最近 `limit` 条（返回时间升序）。
+/// Reads the most recent `limit` records (returned in ascending time order).
 pub fn tail(paths: &Paths, limit: usize) -> Result<Vec<AuditRecord>> {
     if !paths.audit.is_file() {
         return Ok(Vec::new());
@@ -100,7 +96,7 @@ pub fn tail(paths: &Paths, limit: usize) -> Result<Vec<AuditRecord>> {
     Ok(records)
 }
 
-/// `serde` 的 `snake_case` 名，供人类输出使用。
+/// The `serde` `snake_case` name, for human output.
 fn serde_plain_name(action: Action) -> &'static str {
     match action {
         Action::Init => "init",
@@ -156,7 +152,7 @@ mod tests {
         assert_eq!(records[1].subject.as_deref(), Some("e4"));
     }
 
-    /// NFR-9：审计日志里永远不得出现明文字段值。
+    /// NFR-9: plaintext field values must never appear in the audit log.
     #[test]
     fn log_never_contains_secret_material() {
         let (_guard, paths) = setup();

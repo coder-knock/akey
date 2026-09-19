@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["v*"]        # releases are covered by release.yml
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # lib tests run everywhere. The integration suites drive a POSIX shell
+      # (`sh -c`, chmod, /dev/null) and are gated to unix; see TESTPLAN.md.
+      - name: Unit tests
+        run: cargo test --locked --lib
+
+      - name: Integration and end-to-end tests
+        if: runner.os != 'Windows'
+        run: cargo test --locked --test contract --test e2e_sync
+
+      # The installers are what most users actually run, so a syntax error in one is a
+      # broken release. Parsing is cheap here; release.yml runs install.ps1 for real.
+      - name: install.sh parses
+        if: runner.os != 'Windows'
+        run: sh -n install.sh
+
+      - name: install.ps1 parses
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $PWD 'install.ps1'), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count) {
+            $errors | ForEach-Object { Write-Host $_ }
+            exit 1
+          }
+          Write-Host 'install.ps1 parses'

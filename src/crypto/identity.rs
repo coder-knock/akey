@@ -1,4 +1,4 @@
-//! 设备身份：每台机器一份 age X25519 密钥对，私钥仅存本机且永不进 git。
+//! Device identity: one age X25519 keypair per machine; the secret key stays machine-local and never enters git.
 
 use std::path::Path;
 use std::str::FromStr;
@@ -11,14 +11,14 @@ use crate::crypto::boxcrypto;
 use crate::error::{Error, Result};
 use crate::paths;
 
-/// 本机设备身份。
+/// This machine's device identity.
 pub struct DeviceIdentity {
     identity: Identity,
     name: String,
 }
 
 impl DeviceIdentity {
-    /// 生成全新身份。
+    /// Generates a brand-new identity.
     pub fn generate(name: impl Into<String>) -> Self {
         Self {
             identity: Identity::generate(),
@@ -26,9 +26,10 @@ impl DeviceIdentity {
         }
     }
 
-    /// 从 `AGE-SECRET-KEY-1…` 文本解析。
+    /// Parses from `AGE-SECRET-KEY-1…` text.
     ///
-    /// 允许首尾空白：`save` 会在末尾写入换行，读回的文件内容不是纯净的单行。
+    /// Leading/trailing whitespace is allowed: `save` writes a trailing newline, so the content
+    /// read back from the file is not a clean single line.
     pub fn parse(secret: &str, name: impl Into<String>) -> Result<Self> {
         let identity = Identity::from_str(secret.trim())
             .map_err(|why| Error::corrupt(format!("invalid device identity ({why})")))?;
@@ -38,17 +39,17 @@ impl DeviceIdentity {
         })
     }
 
-    /// `AGE-SECRET-KEY-1…`（经 `SecretString` 包裹，避免误打印）。
+    /// `AGE-SECRET-KEY-1…` (wrapped in `SecretString` to prevent accidental printing).
     pub fn secret_string(&self) -> SecretString {
         self.identity.to_string()
     }
 
-    /// 本机公钥，用于写入 `recipients.json`。
+    /// This machine's public key, written into `recipients.json`.
     pub fn recipient(&self) -> Recipient {
         self.identity.to_public()
     }
 
-    /// `age1…` 形式的公钥文本。
+    /// Public-key text in `age1…` form.
     pub fn pubkey(&self) -> String {
         self.recipient().to_string()
     }
@@ -57,23 +58,24 @@ impl DeviceIdentity {
         &self.name
     }
 
-    /// 用本机私钥解密密文。委托给 `boxcrypto::decrypt_with`。
+    /// Decrypts ciphertext with this machine's secret key. Delegates to `boxcrypto::decrypt_with`.
     ///
-    /// 失败 → `Locked`，消息可行动（提示本设备可能已被 `devices rm` 排除）。
+    /// Failure → `Locked`, with an actionable message (hinting that this device may have been
+    /// excluded by `devices rm`).
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         boxcrypto::decrypt_with(&self.identity, ciphertext)
     }
 
-    /// 原子写入并设 `0600`。
+    /// Atomic write with mode `0600`.
     pub fn save(&self, path: &Path) -> Result<()> {
-        // 私钥副本在离开作用域时清零，不留在堆上。
+        // The secret-key copy is zeroized when it leaves scope, not left on the heap.
         let mut bytes = Zeroizing::new(Vec::new());
         bytes.extend_from_slice(self.secret_string().expose_secret().as_bytes());
         bytes.push(b'\n');
         paths::atomic_write(path, &bytes, paths::FILE_MODE)
     }
 
-    /// 读取前先校验权限位；他人可读即拒绝（退出码 4）。
+    /// Checks the permission bits before reading; readable by others is refused (exit code 4).
     pub fn load(path: &Path, name: impl Into<String>) -> Result<Self> {
         paths::ensure_private(path)?;
         let bytes = Zeroizing::new(paths::read_file(path)?);
@@ -86,6 +88,7 @@ impl DeviceIdentity {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
@@ -111,6 +114,10 @@ mod tests {
         assert_eq!(loaded.name(), "macbook");
     }
 
+    /// Mode bits have no Windows equivalent, and there is no way to construct the negative case
+    /// there either: the temp dir already sits inside the profile, so the profile check passes.
+    /// The Windows guard is covered instead by `paths::profile_containment_*`.
+    #[cfg(unix)]
     #[test]
     fn save_writes_0600_and_load_rejects_other_readable_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -120,7 +127,7 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "identity must be owner-only, got {mode:o}");
 
-        // 同组可读 = 身份泄露，读取必须拒绝而不是照常解密。
+        // Group-readable = identity leak, so reading must be refused rather than decrypting anyway.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
         let err = match DeviceIdentity::load(&path, "macbook") {
             Ok(_) => panic!("group-readable identity file must not load"),

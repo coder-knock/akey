@@ -1,0 +1,213 @@
+name: release
+
+# Builds the installers' payload: one archive + sha256 per supported platform.
+#
+# Naming must match what install.sh and install.ps1 look up:
+#   akey-<tag>-<target-triple>.tar.gz[/.sha256]   macOS, Linux
+#   akey-<tag>-<target-triple>.zip[/.sha256]      Windows
+#
+# Windows gets a zip because Expand-Archive (PowerShell) cannot read tar.gz, and every
+# Windows 10 1803+ box has tar.exe but not necessarily in a scriptable mood.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0). Leave empty to build without publishing."
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          # Static musl so the Linux binaries run on any distro regardless of glibc.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            apt: musl-tools
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            apt: musl-tools
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl toolchain
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          target="${{ matrix.target }}"
+          dir="akey-${tag}-${target}"
+          exe=""
+          case "$target" in *windows*) exe=".exe" ;; esac
+
+          mkdir -p "dist/${dir}"
+          cp "target/${target}/release/akey${exe}" "dist/${dir}/"
+          cp LICENSE README.md "dist/${dir}/"
+
+          if [ -n "$exe" ]; then
+            7z a "dist/${dir}.zip" "dist/${dir}" >/dev/null
+            (cd dist && sha256sum "${dir}.zip" > "${dir}.zip.sha256")
+          else
+            tar -C dist -czf "dist/${dir}.tar.gz" "${dir}"
+            (cd dist && sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256")
+          fi
+          ls -l dist
+
+      # Prove the archive is installable, not merely that cargo produced a file.
+      - name: Smoke-test the archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          target="${{ matrix.target }}"
+          dir="akey-${tag}-${target}"
+          out="$(mktemp -d)"
+          case "$target" in
+            *windows*) 7z x "dist/${dir}.zip" -o"$out" >/dev/null ;;
+            *)         tar -xzf "dist/${dir}.tar.gz" -C "$out" ;;
+          esac
+          "./${out}/${dir}/akey" --version
+          "./${out}/${dir}/akey" --help >/dev/null
+
+      # Most users run the installer rather than the archive, so run it — against the archive
+      # just built. The installer fetches `<base>/<tag>/<asset>`, mirroring GitHub's release
+      # layout, so stage the artifacts in that shape under $RUNNER_TEMP and point the
+      # installer at it. The tamper check then proves the refusal path leaves nothing behind.
+      - name: Smoke-test install.sh
+        if: "!startsWith(matrix.target, 'x86_64-pc-windows')"
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          target="${{ matrix.target }}"
+          asset="akey-${tag}-${target}.tar.gz"
+
+          # dist/ also holds the unpacked directory the packaging step made, so name the two
+          # files explicitly rather than globbing.
+          mirror="$(mktemp -d)"
+          mkdir -p "$mirror/$tag"
+          cp "dist/${asset}" "dist/${asset}.sha256" "$mirror/$tag/"
+          export AKEY_VERSION="$tag"
+          export AKEY_DIST_BASE="file://$mirror"
+          export AKEY_INSTALL_DIR="$(mktemp -d)"
+
+          sh install.sh
+          # Byte-identical to what cargo produced. Without this the step would still pass if
+          # the download failed and the installer quietly fell back to a source build.
+          cmp "$AKEY_INSTALL_DIR/akey" "target/${target}/release/akey"
+          "$AKEY_INSTALL_DIR/akey" --version
+
+          printf 'x' >> "$mirror/$tag/$asset"
+          tampered="$(mktemp -d)"
+          if AKEY_INSTALL_DIR="$tampered" sh install.sh 2>/dev/null; then
+            echo "the installer accepted a tampered archive"; exit 1
+          fi
+          [ ! -e "$tampered/akey" ] || { echo "a refused install wrote a binary"; exit 1; }
+          echo "install.sh refuses a tampered archive"
+
+      - name: Smoke-test install.ps1
+        if: startsWith(matrix.target, 'x86_64-pc-windows')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $target = "${{ matrix.target }}"
+
+          # dist\ also holds the unpacked directory the packaging step made, so name the two
+          # files explicitly rather than globbing.
+          $asset = "akey-$tag-$target.zip"
+          $mirror = Join-Path $env:RUNNER_TEMP 'akey-mirror'
+          New-Item -ItemType Directory -Force -Path (Join-Path $mirror $tag) | Out-Null
+          Copy-Item "dist\$asset", "dist\$asset.sha256" (Join-Path $mirror $tag) -Force
+
+          $env:AKEY_NONINTERACTIVE = '1'
+          $env:AKEY_VERSION = $tag
+          $env:AKEY_DIST_BASE = $mirror
+          $env:AKEY_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'akey-install'
+
+          pwsh -NoProfile -File ./install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed with $LASTEXITCODE" }
+
+          $installed = Join-Path $env:AKEY_INSTALL_DIR 'akey.exe'
+          $built = "target\$target\release\akey.exe"
+          # Byte-identical to what cargo produced: otherwise the step would still pass if the
+          # download failed and the installer quietly fell back to a source build.
+          if ((Get-FileHash $installed).Hash -ne (Get-FileHash $built).Hash) {
+            throw 'the installed binary is not the one that was packaged'
+          }
+          & $installed --version
+
+          Add-Content -Path (Join-Path $mirror "$tag\$asset") -Value 'x' -NoNewline
+          $env:AKEY_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'akey-tampered'
+          pwsh -NoProfile -File ./install.ps1 *> $null
+          $code = $LASTEXITCODE
+          if ($code -eq 0) { throw 'the installer accepted a tampered archive' }
+          if (Test-Path (Join-Path $env:AKEY_INSTALL_DIR 'akey.exe')) {
+            throw 'a refused install still wrote a binary'
+          }
+          Write-Host 'install.ps1 refuses a tampered archive'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: akey-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # Only when a tag was pushed; a manual run is just an artifact build.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # gh(1) rather than a third-party release action: one less supply-chain dependency
+      # in the job that produces artefacts users pipe into a shell.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --generate-notes \
+              --verify-tag
+          fi

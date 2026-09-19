@@ -1,19 +1,21 @@
-//! 本机私有目录：路径解析、权限、原子写、文件锁。
+//! Machine-local private directory: path resolution, permissions, atomic writes, file locks.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 
+/// Owner-only, on platforms that have POSIX modes. Windows has none; see [`ensure_private`].
 pub const DIR_MODE: u32 = 0o700;
 pub const FILE_MODE: u32 = 0o600;
 pub const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_POLL: Duration = Duration::from_millis(25);
 
-/// 本机私有文件集合（全部在 `$AKEY_HOME` 下，**永不同步**）。
+/// The set of machine-local private files (all under `$AKEY_HOME`, **never synced**).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     pub home: PathBuf,
@@ -37,7 +39,7 @@ impl Paths {
 
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.home)?;
-        fs::set_permissions(&self.home, fs::Permissions::from_mode(DIR_MODE))?;
+        restrict_dir(&self.home)?;
         Ok(())
     }
 
@@ -50,7 +52,11 @@ impl Paths {
     }
 }
 
-/// `AKEY_HOME` > `--home` 之外：`$XDG_CONFIG_HOME/akey` > `$HOME/.config/akey`。
+/// Beyond `AKEY_HOME` > `--home`:
+/// unix `$XDG_CONFIG_HOME/akey` > `$HOME/.config/akey`; Windows `%APPDATA%\akey`.
+///
+/// On Windows the profile directory is the point: its ACL is already restricted to the user,
+/// which is what makes the identity private in the absence of mode bits.
 pub fn resolve_home(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(p) = explicit {
         return Ok(p.to_path_buf());
@@ -58,22 +64,73 @@ pub fn resolve_home(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(v) = non_empty_env("AKEY_HOME") {
         return Ok(PathBuf::from(v));
     }
-    if let Some(v) = non_empty_env("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(v).join("akey"));
+
+    #[cfg(unix)]
+    {
+        if let Some(v) = non_empty_env("XDG_CONFIG_HOME") {
+            return Ok(PathBuf::from(v).join("akey"));
+        }
+        let home = non_empty_env("HOME").ok_or_else(|| {
+            Error::locked("cannot determine home directory; set $HOME or $AKEY_HOME")
+        })?;
+        Ok(PathBuf::from(home).join(".config").join("akey"))
     }
-    let home = non_empty_env("HOME").ok_or_else(|| {
-        Error::locked("cannot determine home directory; set $HOME or $AKEY_HOME")
-    })?;
-    Ok(PathBuf::from(home).join(".config").join("akey"))
+
+    #[cfg(windows)]
+    {
+        let appdata = non_empty_env("APPDATA").ok_or_else(|| {
+            Error::locked("cannot determine the config directory; set %APPDATA% or AKEY_HOME")
+        })?;
+        Ok(PathBuf::from(appdata).join("akey"))
+    }
 }
 
 fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
     std::env::var_os(key).filter(|v| !v.is_empty())
 }
 
-/// 同目录写入 → `fsync` → 原子 `rename`。失败不留半成品。
+/// Creation-time owner-only mode for a file we are about to write secrets into.
 ///
-/// `mode` 以 `0o600` 建立临时文件，因此不存在"先落地再 chmod"的窗口。
+/// Applying it through the builder's `mode` (rather than a path-based `chmod` after the fact)
+/// is what removes the "readable for a few microseconds" window: the file never exists in a
+/// weaker state than `0600`. Windows has no equivalent and needs none — the profile ACL
+/// already covers it.
+#[cfg(unix)]
+pub fn owner_only(builder: &mut OpenOptions) -> &mut OpenOptions {
+    builder.mode(FILE_MODE)
+}
+
+#[cfg(windows)]
+pub fn owner_only(builder: &mut OpenOptions) -> &mut OpenOptions {
+    builder
+}
+
+#[cfg(unix)]
+fn restrict_dir(dir: &Path) -> Result<()> {
+    fs::set_permissions(dir, fs::Permissions::from_mode(DIR_MODE))?;
+    Ok(())
+}
+
+/// `%APPDATA%\akey` inherits the profile ACL, which is already owner-only. Nothing to do.
+#[cfg(windows)]
+fn restrict_dir(_dir: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_file(file: &File, mode: u32) -> Result<()> {
+    file.set_permissions(fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_file(_file: &File, _mode: u32) -> Result<()> {
+    Ok(())
+}
+
+/// Same-directory write → `fsync` → atomic `rename`. A failure leaves no half-written file.
+///
+/// `mode` creates the temporary file as `0o600`, so there is no "land first, chmod later" window.
 pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
         Error::usage(format!("path has no parent directory: {}", path.display()))
@@ -83,8 +140,7 @@ pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     let mut tmp = tempfile::Builder::new()
         .prefix(".akey-tmp-")
         .tempfile_in(dir)?;
-    tmp.as_file()
-        .set_permissions(fs::Permissions::from_mode(mode))?;
+    restrict_file(tmp.as_file(), mode)?;
     tmp.write_all(data)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|e| Error::Io(e.error))?;
@@ -92,13 +148,24 @@ pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     Ok(())
 }
 
+/// Durably record a rename by fsyncing the directory that holds it.
+///
+/// Unix only: opening a directory as a file needs `FILE_FLAG_BACKUP_SEMANTICS` on Windows, and
+/// `File::open` there fails. The rename itself is still atomic.
+#[cfg(unix)]
 fn sync_dir(dir: &Path) {
     if let Ok(handle) = File::open(dir) {
         let _ = handle.sync_all();
     }
 }
 
-/// 校验文件只有属主可读写。其他用户可读时拒绝——身份泄露即整库泄露。
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) {}
+
+
+/// Verifies the file is owner-readable/writable only. Readable by other users is refused —
+/// an identity leak is a whole-vault leak.
+#[cfg(unix)]
 pub fn ensure_private(path: &Path) -> Result<()> {
     let meta = fs::metadata(path)?;
     let mode = meta.permissions().mode() & 0o777;
@@ -112,10 +179,55 @@ pub fn ensure_private(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 只读地探测权限是否安全，供 `doctor` 使用（不拒绝，只报告）。
+/// Windows has no POSIX mode bits, so the invariant is stated differently and checked
+/// differently: the private files must live inside the user profile, whose ACL the OS already
+/// restricts to that user (plus SYSTEM and Administrators). That is the same guarantee as
+/// `0600` in the directory-ownership sense — and unlike a mode check it also covers the
+/// "someone pointed `AKEY_HOME` at `C:\shared`" case, which is the one that actually happens.
+///
+/// Per-file ACLs are deliberately not set: the parent directory is already owner-only, and
+/// writing a DACL correctly is a lot of surface for no additional guarantee.
+#[cfg(windows)]
+pub fn ensure_private(path: &Path) -> Result<()> {
+    if is_inside(user_profile().as_deref(), path) {
+        return Ok(());
+    }
+    Err(Error::locked(format!(
+        "{} is outside your user profile; on Windows akey relies on the profile ACL to keep the \
+         identity private, so it refuses to use a shared location. Move it under {} or pass --home",
+        path.display(),
+        user_profile().map_or_else(
+            || "%USERPROFILE%".to_string(),
+            |p| p.display().to_string()
+        )
+    )))
+}
+
+/// `%USERPROFILE%` — the Windows equivalent of `$HOME`.
+#[cfg(windows)]
+fn user_profile() -> Option<PathBuf> {
+    non_empty_env("USERPROFILE").map(PathBuf::from)
+}
+
+/// Path containment. Split out so a unit test can drive it on any platform.
+#[cfg(any(windows, test))]
+fn is_inside(root: Option<&Path>, path: &Path) -> bool {
+    // Prefix comparison rather than canonicalisation: both sides come from the same source
+    // (an environment variable and a path we built from it), and canonicalising would touch
+    // the filesystem on a code path that is supposed to be a cheap guard.
+    root.is_some_and(|root| path.starts_with(root))
+}
+
+/// Read-only probe of whether permissions are safe, for `doctor` (does not refuse, only reports).
+#[cfg(unix)]
 pub fn permissions_exposed(path: &Path) -> Result<bool> {
     let meta = fs::metadata(path)?;
     Ok(meta.permissions().mode() & 0o077 != 0)
+}
+
+#[cfg(windows)]
+pub fn permissions_exposed(path: &Path) -> Result<bool> {
+    Ok(!is_inside(user_profile().as_deref(), path))
 }
 
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
@@ -128,20 +240,29 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     })
 }
 
-/// 排他锁下的读-改-写。超时返回 `locked`（退出码 4）。
+/// Read-modify-write under an exclusive lock. Timeout returns `locked` (exit code 4).
 pub fn with_write_lock<T>(lock_path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    with_write_lock_timeout(lock_path, LOCK_TIMEOUT, f)
+}
+
+/// The timeout is a parameter so the contention path can be asserted in milliseconds rather
+/// than in the ten seconds a real caller waits. Two `akey` processes writing at once is the
+/// case this protects: the loser must get a clear `locked`, not interleave or hang forever.
+fn with_write_lock_timeout<T>(
+    lock_path: &Path,
+    timeout: Duration,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     if let Some(dir) = lock_path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .mode(FILE_MODE)
+    // `truncate(false)`: the lock file carries no content, and truncating a file another
+    // process holds open is a side effect for nothing.
+    let file = owner_only(OpenOptions::new().create(true).read(true).write(true).truncate(false))
         .open(lock_path)?;
     let mut lock = fd_lock::RwLock::new(file);
 
-    let deadline = Instant::now() + LOCK_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let _guard = loop {
         match lock.try_write() {
             Ok(guard) => break guard,
@@ -181,8 +302,31 @@ mod tests {
     fn ensure_creates_private_home() {
         let (_guard, paths) = temp_home();
         paths.ensure().unwrap();
-        let mode = fs::metadata(&paths.home).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, DIR_MODE, "home must be owner-only");
+        assert!(paths.home.is_dir(), "ensure() must create the home directory");
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&paths.home).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, DIR_MODE, "home must be owner-only");
+        }
+    }
+
+    /// The Windows private-file guard: everything must sit inside the user profile. Run on every
+    /// platform, because this predicate *is* the Windows guarantee.
+    #[test]
+    fn profile_containment_is_a_prefix_test_over_path_components() {
+        let profile = Path::new("/home/ada");
+        assert!(is_inside(
+            Some(profile),
+            Path::new("/home/ada/.config/akey/identity.key")
+        ));
+        assert!(!is_inside(Some(profile), Path::new("/shared/akey/identity.key")));
+        // A sibling whose *name* shares a prefix must not count: component-wise, not string-wise.
+        assert!(!is_inside(
+            Some(profile),
+            Path::new("/home/adamantine/identity.key")
+        ));
+        // No profile to compare against is not a pass.
+        assert!(!is_inside(None, Path::new("/home/ada/identity.key")));
     }
 
     #[test]
@@ -193,8 +337,11 @@ mod tests {
 
         atomic_write(&target, b"first", FILE_MODE).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"first");
-        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, FILE_MODE);
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, FILE_MODE);
+        }
 
         atomic_write(&target, b"second", FILE_MODE).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"second");
@@ -217,7 +364,7 @@ mod tests {
 
     #[test]
     fn replacing_a_file_never_exposes_a_partial_state() {
-        // 写入一个远大于单次 write 的负载，确认旧内容要么在、要么被完整替换。
+        // Write a payload far larger than a single write, confirming the old content is either present or fully replaced.
         let (_guard, paths) = temp_home();
         paths.ensure().unwrap();
         let target = paths.home.join("big");
@@ -229,6 +376,8 @@ mod tests {
         assert!(got.iter().all(|b| *b == b'b'), "torn write detected");
     }
 
+    /// Mode bits are unix-only; on Windows the equivalent guard is `is_inside`, above.
+    #[cfg(unix)]
     #[test]
     fn ensure_private_rejects_group_readable_file() {
         let (_guard, paths) = temp_home();
@@ -250,6 +399,41 @@ mod tests {
         paths.ensure().unwrap();
         let out = with_write_lock(&paths.lock, || Ok(41 + 1)).unwrap();
         assert_eq!(out, 42);
+    }
+
+    /// The contended half: while another holder has the lock, a writer must give up with
+    /// `locked` rather than hang or proceed. Two `akey` processes racing on one vault is
+    /// ordinary (an agent retrying while a sync runs), so this is the path that matters.
+    #[test]
+    fn write_lock_times_out_with_locked_while_another_holder_is_active() {
+        let (_guard, paths) = temp_home();
+        paths.ensure().unwrap();
+
+        // A separate handle, exactly as a second process would have.
+        let held = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&paths.lock)
+            .unwrap();
+        let mut holder = fd_lock::RwLock::new(held);
+        let _held = holder.write().unwrap();
+
+        let err = with_write_lock_timeout(&paths.lock, Duration::from_millis(50), || Ok(1))
+            .expect_err("a held lock must not be granted");
+        assert_eq!(err.exit_code(), 4);
+        assert!(
+            err.to_string().contains("another akey process"),
+            "the failure must say who holds it: {err}"
+        );
+
+        // And it is genuinely free again once the holder lets go.
+        drop(_held);
+        assert_eq!(
+            with_write_lock_timeout(&paths.lock, Duration::from_millis(50), || Ok(7)).unwrap(),
+            7
+        );
     }
 
     #[test]
