@@ -86,6 +86,16 @@ the pipes and keeps the TTY).
 
 ---
 
+## 2.5 Language
+
+Every command accepts a global `--lang <tag>` (or `$AKEY_LANG`). It changes **human-readable
+text only**: `--json` is byte-identical in every language, so parse `error.code` and the stable
+keys, never the prose around them.
+
+If you match on human text for any reason, pin the language — `akey --lang en …` — so a user's
+locale cannot change what you are matching. Supported tags are `en` and `zh-CN`; anything else is
+refused with exit 2 when you asked for it explicitly by name.
+
 ## 3. Discovering capability: do not guess
 
 ```bash

@@ -95,14 +95,35 @@ impl Error {
     }
 
     /// Next-step hint aimed at an agent. Returned only when there is a concrete action.
+    ///
+    /// Machine-readable consumers should key off [`Error::code`] rather than this text; the hint
+    /// exists so an agent that is reading prose still has something to act on.
     pub fn hint(&self) -> Option<&'static str> {
         match self {
-            Error::NotFound(_) => Some("run `akey list` to see available entries"),
-            Error::Ambiguous(_) => Some("use the entry ID instead of the name"),
-            Error::Locked(_) => Some("run `akey doctor` to diagnose the vault state"),
-            Error::Conflict(_) => Some("run `akey conflicts` then `akey resolve <name> --ours|--theirs`"),
-            Error::Denied(_) => Some("inject with `akey run` instead of reading the value"),
-            Error::TokenScope(_) => Some("ask an operator to widen the token's --allow list"),
+            Error::NotFound(_) => Some(crate::i18n::m(
+                "run `akey list` to see available entries",
+                "运行 `akey list` 查看可选条目",
+            )),
+            Error::Ambiguous(_) => Some(crate::i18n::m(
+                "use the entry ID instead of the name",
+                "改用条目 ID 而不是名字",
+            )),
+            Error::Locked(_) => Some(crate::i18n::m(
+                "run `akey doctor` to diagnose the vault state",
+                "运行 `akey doctor` 诊断金库状态",
+            )),
+            Error::Conflict(_) => Some(crate::i18n::m(
+                "run `akey conflicts` then `akey resolve <name> --ours|--theirs`",
+                "先运行 `akey conflicts`，再 `akey resolve <name> --ours|--theirs`",
+            )),
+            Error::Denied(_) => Some(crate::i18n::m(
+                "inject with `akey run` instead of reading the value",
+                "改用 `akey run` 注入，而不是读取明文",
+            )),
+            Error::TokenScope(_) => Some(crate::i18n::m(
+                "ask an operator to widen the token's --allow list",
+                "请管理员扩大令牌的 --allow 列表",
+            )),
             _ => None,
         }
     }

@@ -284,6 +284,22 @@ pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
 }
 
 pub fn run() -> i32 {
+    // Localize before parsing. `--help` is produced by the parse, so the language has to be
+    // settled first — hence the argv pre-scan. Precedence is `--lang`, then `$AKEY_LANG`, then
+    // the locale variables, then English.
+    match crate::i18n::Lang::resolve(crate::i18n::lang_from_argv(std::env::args().skip(1)).as_deref())
+    {
+        Ok(lang) => crate::i18n::set_lang(lang),
+        Err(err) => {
+            // Reported in English, because the request itself was for a language that does not
+            // exist. Goes through `Output` like every other failure that happens before a
+            // `Ctx` exists, rather than a bare stderr line.
+            let err = Error::usage(err.to_string());
+            Output::human().error(&err);
+            return err.exit_code();
+        }
+    }
+
     let cli = Cli::parse();
     let ctx = match Ctx::new(&cli) {
         Ok(ctx) => ctx,

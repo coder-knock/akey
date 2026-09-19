@@ -16,6 +16,7 @@ pub mod cmd;
 pub mod config;
 pub mod crypto;
 pub mod error;
+pub mod i18n;
 pub mod inject;
 pub mod output;
 pub mod paths;

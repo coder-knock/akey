@@ -41,6 +41,11 @@ Anything the child prints that looks like a secret is replaced with `<concealed 
 `akey run`'s stdout belongs to the child, and **so does the exit code** — do not read it as an
 akey failure.
 
+## Language
+
+Add `--lang en` if you parse any human-readable text; `--json` output is identical in every
+language, so prefer that. Supported: `en`, `zh-CN`.
+
 ## Finding the reference string
 
 ```bash

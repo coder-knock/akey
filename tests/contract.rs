@@ -943,3 +943,55 @@ fn doctor_json_reports_every_probe_with_a_known_status() {
         );
     }
 }
+
+// --------------------------------------------------------------- localization
+
+/// The language moves human text and nothing else.
+///
+/// `--json` is the machine contract, so it must come out byte-identical in every language: an
+/// agent that learned to parse the envelope must not have to re-learn it per locale. Only the
+/// prose changes.
+#[test]
+fn language_changes_human_text_and_leaves_the_json_contract_untouched() {
+    let device = with_entry();
+
+    let en = device.stdout(&["--lang", "en", "--help"]);
+    let zh = device.stdout(&["--lang", "zh-CN", "--help"]);
+    assert!(en.contains("Create an entry"), "english help:\n{en}");
+    assert!(zh.contains("新建条目"), "chinese help:\n{zh}");
+    assert_ne!(en, zh, "the flag must actually change something");
+
+    let en_json = device.run(&["--lang", "en", "--json", "list"]);
+    let zh_json = device.run(&["--lang", "zh-CN", "--json", "list"]);
+    assert_eq!(
+        en_json.stdout, zh_json.stdout,
+        "the JSON envelope must not depend on the language"
+    );
+
+    // An explicit language that does not exist is refused rather than silently downgraded.
+    let out = device.run(&["--lang", "fr", "list"]);
+    assert_eq!(out.status.code(), Some(2), "usage error");
+    assert!(!out.stderr.is_empty());
+    assert!(out.stdout.is_empty(), "a failing command writes nothing to stdout");
+}
+
+/// Hints are localized; the error code they accompany is not.
+///
+/// Message bodies are still being converted (they are English-only today), so this asserts the
+/// hint specifically — the part an agent acts on next.
+#[test]
+fn error_hints_follow_the_language_while_the_code_stays_stable() {
+    let device = with_entry();
+
+    let (code, kind, _) = device.expect_failure(&["get", "ghost"]);
+    assert_eq!(code, 3);
+    assert_eq!(kind, "not_found", "the machine-readable code is stable");
+
+    let zh = String::from_utf8_lossy(&device.run(&["--lang", "zh-CN", "get", "ghost"]).stderr)
+        .to_string();
+    assert!(zh.contains("查看可选条目"), "hint not localized:\n{zh}");
+
+    let en = String::from_utf8_lossy(&device.run(&["--lang", "en", "get", "ghost"]).stderr)
+        .to_string();
+    assert!(en.contains("see available entries"), "english hint:\n{en}");
+}
