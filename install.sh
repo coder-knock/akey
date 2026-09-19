@@ -190,13 +190,18 @@ or use a platform with a prebuilt binary."
     say "${DIM}    rustc ${rustc_version:-unknown} (need >= ${MIN_RUST} for edition 2024)${RESET}"
 
     step "building from source (this takes a couple of minutes)"
-    if [ "$VERSION" = "latest" ]; then
-        cargo install --git "https://github.com/${REPO}" --locked --root "${TMP_ROOT:-$HOME/.akey-build}" "$BIN" \
-            || die "cargo install failed"
-    else
-        cargo install --git "https://github.com/${REPO}" --tag "$VERSION" --locked \
-            --root "${TMP_ROOT:-$HOME/.akey-build}" "$BIN" || die "cargo install failed"
-    fi
+    # An empty VERSION means "the default branch", not "the tag called empty string": passing
+    # `--tag ""` makes cargo build a refspec out of nothing and fail.
+    case "$VERSION" in
+        "" | latest)
+            cargo install --git "https://github.com/${REPO}" --locked --root "${TMP_ROOT:-$HOME/.akey-build}" "$BIN" \
+                || die "cargo install failed"
+            ;;
+        *)
+            cargo install --git "https://github.com/${REPO}" --tag "$VERSION" --locked \
+                --root "${TMP_ROOT:-$HOME/.akey-build}" "$BIN" || die "cargo install failed"
+            ;;
+    esac
     src="${TMP_ROOT:-$HOME/.akey-build}/bin/${BIN}"
     place_binary "$src"
 }
@@ -263,11 +268,16 @@ say "${DIM}    platform: ${triple}${RESET}"
 
 if [ "$VERSION" = "latest" ]; then
     step "looking up the latest release"
-    if ! VERSION=$(resolve_latest_tag); then
+    # Assign to a temporary, not to VERSION. `VERSION=$(...)` sets VERSION to the empty string
+    # when the command substitution fails, so the fallback below would believe it had been given
+    # an explicit version and run `cargo install --tag ""` — which cargo rejects with
+    # "'+refs/tags/:refs/remotes/origin/tags/' is not a valid refspec".
+    if ! tag=$(resolve_latest_tag); then
         warn "could not reach GitHub to find the latest release"
         install_from_source
         exit 0
     fi
+    VERSION=$tag
 fi
 say "${DIM}    version: ${VERSION}${RESET}"
 
