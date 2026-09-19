@@ -16,14 +16,21 @@ use crate::error::{Error, Result};
 /// nobody can open is an incident).
 pub fn encrypt_to(recipients: &[Recipient], plaintext: &[u8]) -> Result<Vec<u8>> {
     if recipients.is_empty() {
-        return Err(Error::usage(
+        return Err(Error::usage(crate::msg!(
             "refusing to encrypt without recipients: nobody could ever decrypt the result",
-        ));
+            "拒绝在没有收件人的情况下加密：结果将无人能够解密"
+        )));
     }
 
     let encryptor =
         age::Encryptor::with_recipients(recipients.iter().map(|r| r as &dyn age::Recipient))
-            .map_err(|e| Error::crypto(format!("cannot encrypt to the given recipients: {e}")))?;
+            .map_err(|e| {
+                Error::crypto(crate::msg!(
+                    "cannot encrypt to the given recipients: {}",
+                    "无法向指定收件人加密：{}",
+                    e
+                ))
+            })?;
     seal(encryptor, plaintext)
 }
 
@@ -50,13 +57,31 @@ fn seal(encryptor: age::Encryptor, plaintext: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut writer = encryptor
         .wrap_output(&mut out)
-        .map_err(|e| Error::crypto(format!("cannot start age encryption: {e}")))?;
+        .map_err(|e| {
+            Error::crypto(crate::msg!(
+                "cannot start age encryption: {}",
+                "无法启动 age 加密：{}",
+                e
+            ))
+        })?;
     writer
         .write_all(plaintext)
-        .map_err(|e| Error::crypto(format!("age encryption failed: {e}")))?;
+        .map_err(|e| {
+            Error::crypto(crate::msg!(
+                "age encryption failed: {}",
+                "age 加密失败：{}",
+                e
+            ))
+        })?;
     writer
         .finish()
-        .map_err(|e| Error::crypto(format!("age encryption failed: {e}")))?;
+        .map_err(|e| {
+            Error::crypto(crate::msg!(
+                "age encryption failed: {}",
+                "age 加密失败：{}",
+                e
+            ))
+        })?;
     Ok(out)
 }
 
@@ -79,9 +104,11 @@ fn open<'a>(
 
 /// The outward wording for a decryption failure: make clear it "may be that this device was removed", not just "cannot open".
 fn cannot_open(reason: &dyn std::fmt::Display) -> Error {
-    Error::locked(format!(
-        "cannot decrypt the vault ({reason}); if this device was removed, re-add it with \
-         `akey devices add` — see `akey devices list`"
+    Error::locked(crate::msg!(
+        "cannot decrypt the vault ({}); if this device was removed, re-add it with \
+         `akey devices add` — see `akey devices list`",
+        "无法解密金库（{}）；如果该设备已被移除，请用 `akey devices add` 重新添加——参见 `akey devices list`",
+        reason
     ))
 }
 

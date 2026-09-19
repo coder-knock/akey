@@ -97,7 +97,11 @@ impl Recipients {
                 }
                 Ok(())
             }
-            None => Err(Error::not_found(format!("no recipient named {name}"))),
+            None => Err(Error::not_found(crate::msg!(
+                "no recipient named {}",
+                "没有名为 '{}' 的收件人",
+                name
+            ))),
         }
     }
 
@@ -134,7 +138,11 @@ impl Recipients {
             .into_iter()
             .map(|pubkey| {
                 pubkey.parse::<age::x25519::Recipient>().map_err(|_| {
-                    Error::corrupt(format!("invalid age recipient public key: {pubkey}"))
+                    Error::corrupt(crate::msg!(
+                        "invalid age recipient public key: {}",
+                        "age 收件人公钥无效：{}",
+                        pubkey
+                    ))
                 })
             })
             .collect()
@@ -145,13 +153,23 @@ impl Recipients {
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = paths::read_file(path)?;
         serde_json::from_slice(&bytes).map_err(|e| {
-            Error::corrupt(format!("{}: invalid recipients json: {e}", path.display()))
+            Error::corrupt(crate::msg!(
+                "{}: invalid recipients json: {}",
+                "{}：不是合法的 recipients json：{}",
+                path.display(),
+                e
+            ))
         })
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let mut bytes = serde_json::to_vec_pretty(self)
-            .map_err(|e| Error::corrupt(format!("failed to serialize recipients: {e}")))?;
+        let mut bytes = serde_json::to_vec_pretty(self).map_err(|e| {
+            Error::corrupt(crate::msg!(
+                "failed to serialize recipients: {}",
+                "序列化收件人失败：{}",
+                e
+            ))
+        })?;
         bytes.push(b'\n');
         paths::atomic_write(path, &bytes, paths::FILE_MODE)
     }

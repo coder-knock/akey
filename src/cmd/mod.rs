@@ -64,8 +64,10 @@ impl Ctx {
         if self.assume_yes {
             return Ok(());
         }
-        Err(Error::Usage(format!(
-            "refusing to {what} without --yes (this writes plaintext outside the vault)"
+        Err(Error::Usage(crate::msg!(
+            "refusing to {} without --yes (this writes plaintext outside the vault)",
+            "未提供 --yes 时拒绝{}（这会把明文写到金库之外）",
+            what
         )))
     }
 
@@ -85,9 +87,10 @@ impl Ctx {
                 return Ok(Some(meta));
             }
         }
-        Err(Error::locked(
+        Err(Error::locked(crate::msg!(
             "AKEY_TOKEN does not match any active token in this vault",
-        ))
+            "AKEY_TOKEN 与本金库中任何有效令牌都不匹配"
+        )))
     }
 
     /// Validate the token and check whether it may access `entry_name`.
@@ -109,15 +112,17 @@ impl Ctx {
     /// and token policy.
     pub fn gate_reveal(&self, vault: &Vault, entry: Option<&Entry>) -> Result<()> {
         if no_reveal_env() {
-            return Err(Error::denied(
+            return Err(Error::denied(crate::msg!(
                 "AKEY_NO_REVEAL is set; use `akey run` to inject without exposing the value",
-            ));
+                "已设置 AKEY_NO_REVEAL；请使用 `akey run` 注入，不要暴露明文"
+            )));
         }
         if let Some(entry) = entry
             && entry.reveal == Reveal::Deny
         {
-            return Err(Error::denied(format!(
+            return Err(Error::denied(crate::msg!(
                 "entry '{}' is marked reveal=deny",
+                "条目 '{}' 已标记 reveal=deny",
                 entry.name
             )));
         }
@@ -130,8 +135,9 @@ impl Ctx {
                 crate::crypto::token::authorize(meta, &entry.name, chrono::Utc::now())?;
             }
             if meta.deny_reveal {
-                return Err(Error::denied(format!(
+                return Err(Error::denied(crate::msg!(
                     "token '{}' was issued with --deny-reveal",
+                    "令牌 '{}' 签发时带了 --deny-reveal",
                     meta.name
                 )));
             }
@@ -146,10 +152,11 @@ impl Ctx {
     /// entry could modify the vault or delete entries — scoping would be a sham.
     pub fn gate_write(&self) -> Result<()> {
         match &self.token {
-            Some(_) => Err(Error::denied(
+            Some(_) => Err(Error::denied(crate::msg!(
                 "this command is running with AKEY_TOKEN, which is a read-only capability; \
                  run it with the local device identity instead",
-            )),
+                "本命令正以 AKEY_TOKEN 运行，它是只读能力；请改用本机设备身份运行"
+            ))),
             None => Ok(()),
         }
     }
@@ -259,15 +266,19 @@ fn no_reveal_env() -> bool {
 pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
     let raw = raw.trim();
     if raw.is_empty() {
-        return Err(Error::usage("empty duration"));
+        return Err(Error::usage(crate::msg!("empty duration", "时长为空")));
     }
     let (digits, unit) = raw.split_at(
         raw.find(|c: char| !c.is_ascii_digit())
             .unwrap_or(raw.len()),
     );
-    let value: i64 = digits
-        .parse()
-        .map_err(|_| Error::usage(format!("invalid duration '{raw}': expected e.g. 30d, 12h, 90s")))?;
+    let value: i64 = digits.parse().map_err(|_| {
+        Error::usage(crate::msg!(
+            "invalid duration '{}': expected e.g. 30d, 12h, 90s",
+            "非法时长 '{}'：应为 30d、12h、90s",
+            raw
+        ))
+    })?;
     let seconds = match unit.trim() {
         "" | "s" | "sec" | "secs" => value,
         "m" | "min" | "mins" => value * 60,
@@ -275,8 +286,10 @@ pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
         "d" | "day" | "days" => value * 86_400,
         "w" | "wk" | "weeks" => value * 604_800,
         other => {
-            return Err(Error::usage(format!(
-                "invalid duration unit '{other}': use s, m, h, d or w"
+            return Err(Error::usage(crate::msg!(
+                "invalid duration unit '{}': use s, m, h, d or w",
+                "非法时长单位 '{}'：请使用 s、m、h、d 或 w",
+                other
             )));
         }
     };
@@ -380,10 +393,18 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
         && !conflicts.is_empty()
     {
         let names: Vec<&str> = conflicts.iter().map(|c| c.name.as_str()).collect();
-        return Err(Error::Conflict(format!(
-            "merged and pushed, but {} conflicting entr{} need review: {}",
+        // English pluralises the noun and Chinese does not, so the noun is the localized unit
+        // and the count and names stay separate arguments in both languages.
+        let noun = if conflicts.len() == 1 {
+            crate::msg!("entry", "条目")
+        } else {
+            crate::msg!("entries", "条目")
+        };
+        return Err(Error::Conflict(crate::msg!(
+            "merged and pushed, but {} conflicting {} need review: {}",
+            "已合并并推送，但 {} 个冲突{}需复核：{}",
             conflicts.len(),
-            if conflicts.len() == 1 { "y" } else { "ies" },
+            noun,
             names.join(", ")
         )));
     }

@@ -82,8 +82,9 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
     );
 
     if !git.is_repo() {
-        return Err(Error::SyncFailed(format!(
+        return Err(Error::SyncFailed(crate::msg!(
             "{} is not a git repository; run `akey init` first",
+            "{} 不是 git 仓库；请先运行 `akey init`",
             store.repo().display()
         )));
     }
@@ -112,7 +113,10 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
                 PushOutcome::Pushed => Ok(SyncOutcome::Pushed { commits: 1 }),
                 PushOutcome::UpToDate => Ok(SyncOutcome::UpToDate),
                 PushOutcome::Rejected => {
-                    last_rejection = Some("remote branch appeared while pushing".to_string());
+                    last_rejection = Some(crate::msg!(
+                        "remote branch appeared while pushing",
+                        "推送过程中远端分支出现"
+                    ));
                     continue;
                 }
             };
@@ -129,7 +133,10 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
                 PushOutcome::Pushed => Ok(SyncOutcome::Pushed { commits: ahead }),
                 PushOutcome::UpToDate => Ok(SyncOutcome::UpToDate),
                 PushOutcome::Rejected => {
-                    last_rejection = Some("remote advanced concurrently".to_string());
+                    last_rejection = Some(crate::msg!(
+                        "remote advanced concurrently",
+                        "远端已并发更新"
+                    ));
                     continue;
                 }
             };
@@ -138,9 +145,10 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
         if git.is_ancestor(&local_rev, &remote_rev)? {
             // Remote is ahead → fast-forward.
             if mode == SyncMode::Push {
-                return Err(Error::SyncFailed(
-                    "remote is ahead; run `akey sync` (without --push) to pull and merge".into(),
-                ));
+                return Err(Error::SyncFailed(crate::msg!(
+                    "remote is ahead; run `akey sync` (without --push) to pull and merge",
+                    "远端领先；请运行 `akey sync`（不带 --push）拉取并合并"
+                )));
             }
             let behind = git.commit_count(&format!("{local_rev}..{remote_rev}"))?;
 
@@ -169,8 +177,11 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
             // silently enters a "the vault is there but cannot be opened" state, and the
             // user only learns of their own revocation on the next command.
             store.load().map_err(|e| {
-                Error::Locked(format!(
-                    "pulled {behind} commit(s) but this device can no longer decrypt the vault: {e}"
+                Error::Locked(crate::msg!(
+                    "pulled {} commit(s) but this device can no longer decrypt the vault: {}",
+                    "已拉取 {} 个提交，但本设备已无法解密金库：{}",
+                    behind,
+                    e
                 ))
             })?;
             return Ok(SyncOutcome::Pulled { commits: behind });
@@ -178,14 +189,16 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
 
         // Diverged → three-way merge.
         if mode == SyncMode::Pull {
-            return Err(Error::SyncFailed(
-                "local and remote have diverged; run `akey sync` to merge".into(),
-            ));
+            return Err(Error::SyncFailed(crate::msg!(
+                "local and remote have diverged; run `akey sync` to merge",
+                "本地与远端已分叉；请运行 `akey sync` 进行合并"
+            )));
         }
         let base_rev = git.merge_base(&local_rev, &remote_rev)?.ok_or_else(|| {
-            Error::SyncFailed(
-                "local and remote share no common ancestor; refusing to merge".to_string(),
-            )
+            Error::SyncFailed(crate::msg!(
+                "local and remote share no common ancestor; refusing to merge",
+                "本地与远端没有共同祖先；拒绝合并"
+            ))
         })?;
         let merged = merge(store, &git, &base_rev, &remote_rev)?;
 
@@ -197,15 +210,20 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
                 });
             }
             PushOutcome::Rejected => {
-                last_rejection = Some("another device pushed while merging".to_string());
+                last_rejection = Some(crate::msg!(
+                    "another device pushed while merging",
+                    "合并期间另一台设备完成了推送"
+                ));
                 continue;
             }
         }
     }
 
-    Err(Error::SyncFailed(format!(
-        "push rejected {MAX_PUSH_ATTEMPTS} times; another device is writing concurrently ({})",
-        last_rejection.unwrap_or_else(|| "unknown reason".into())
+    Err(Error::SyncFailed(crate::msg!(
+        "push rejected {} times; another device is writing concurrently ({})",
+        "推送被拒绝 {} 次；另一台设备正在并发写入（{}）",
+        MAX_PUSH_ATTEMPTS,
+        last_rejection.unwrap_or_else(|| crate::msg!("unknown reason", "原因未知"))
     )))
 }
 
@@ -240,7 +258,10 @@ fn merge(store: &Store, git: &Git, base_rev: &str, remote_rev: &str) -> Result<M
         None => Vault::default(),
     };
     let theirs_ciphertext = git.show_bytes(remote_rev, VAULT_FILE)?.ok_or_else(|| {
-        Error::SyncFailed("remote revision has no vault.age; refusing to overwrite".into())
+        Error::SyncFailed(crate::msg!(
+            "remote revision has no vault.age; refusing to overwrite",
+            "远端版本没有 vault.age；拒绝覆盖"
+        ))
     })?;
     let theirs = store.open_ciphertext(&theirs_ciphertext)?;
     let ours = store.load()?;
@@ -280,8 +301,15 @@ struct MergeOutcome {
 
 fn recipients_at(git: &Git, rev: &str) -> Result<Recipients> {
     match git.show_bytes(rev, RECIPIENTS_FILE)? {
-        Some(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|e| Error::Corrupt(format!("{RECIPIENTS_FILE}@{rev} is not valid JSON: {e}"))),
+        Some(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
+            Error::Corrupt(crate::msg!(
+                "{}@{} is not valid JSON: {}",
+                "{}@{} 不是合法的 JSON：{}",
+                RECIPIENTS_FILE,
+                rev,
+                e
+            ))
+        }),
         None => Ok(Recipients::default()),
     }
 }

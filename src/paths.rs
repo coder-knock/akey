@@ -71,7 +71,10 @@ pub fn resolve_home(explicit: Option<&Path>) -> Result<PathBuf> {
             return Ok(PathBuf::from(v).join("akey"));
         }
         let home = non_empty_env("HOME").ok_or_else(|| {
-            Error::locked("cannot determine home directory; set $HOME or $AKEY_HOME")
+            Error::locked(crate::msg!(
+                "cannot determine home directory; set $HOME or $AKEY_HOME",
+                "无法确定主目录；请设置 $HOME 或 $AKEY_HOME"
+            ))
         })?;
         Ok(PathBuf::from(home).join(".config").join("akey"))
     }
@@ -79,7 +82,10 @@ pub fn resolve_home(explicit: Option<&Path>) -> Result<PathBuf> {
     #[cfg(windows)]
     {
         let appdata = non_empty_env("APPDATA").ok_or_else(|| {
-            Error::locked("cannot determine the config directory; set %APPDATA% or AKEY_HOME")
+            Error::locked(crate::msg!(
+                "cannot determine the config directory; set %APPDATA% or AKEY_HOME",
+                "无法确定配置目录；请设置 %APPDATA% 或 AKEY_HOME"
+            ))
         })?;
         Ok(PathBuf::from(appdata).join("akey"))
     }
@@ -133,7 +139,11 @@ fn restrict_file(_file: &File, _mode: u32) -> Result<()> {
 /// `mode` creates the temporary file as `0o600`, so there is no "land first, chmod later" window.
 pub fn atomic_write(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
-        Error::usage(format!("path has no parent directory: {}", path.display()))
+        Error::usage(crate::msg!(
+            "path has no parent directory: {}",
+            "路径没有父目录：{}",
+            path.display()
+        ))
     })?;
     fs::create_dir_all(dir)?;
 
@@ -170,9 +180,11 @@ pub fn ensure_private(path: &Path) -> Result<()> {
     let meta = fs::metadata(path)?;
     let mode = meta.permissions().mode() & 0o777;
     if mode & 0o077 != 0 {
-        return Err(Error::locked(format!(
-            "{} is accessible by other users (mode {mode:o}); run: chmod 600 {}",
+        return Err(Error::locked(crate::msg!(
+            "{} is accessible by other users (mode {}); run: chmod 600 {}",
+            "{} 可被其他用户访问（模式 {}）；请运行：chmod 600 {}",
             path.display(),
+            format!("{mode:o}"),
             path.display()
         )));
     }
@@ -192,9 +204,10 @@ pub fn ensure_private(path: &Path) -> Result<()> {
     if is_inside(user_profile().as_deref(), path) {
         return Ok(());
     }
-    Err(Error::locked(format!(
+    Err(Error::locked(crate::msg!(
         "{} is outside your user profile; on Windows akey relies on the profile ACL to keep the \
          identity private, so it refuses to use a shared location. Move it under {} or pass --home",
+        "{} 不在你的用户配置目录内；在 Windows 上 akey 依赖配置文件 ACL 来保证身份私密，因此拒绝使用共享位置。请将它移动到 {} 下，或传入 --home",
         path.display(),
         user_profile().map_or_else(
             || "%USERPROFILE%".to_string(),
@@ -233,7 +246,11 @@ pub fn permissions_exposed(path: &Path) -> Result<bool> {
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            Error::locked(format!("{} not found; run `akey init`", path.display()))
+            Error::locked(crate::msg!(
+                "{} not found; run `akey init`",
+                "{} 未找到；请运行 `akey init`",
+                path.display()
+            ))
         } else {
             Error::Io(e)
         }
@@ -268,8 +285,9 @@ fn with_write_lock_timeout<T>(
             Ok(guard) => break guard,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err(Error::locked(format!(
+                    return Err(Error::locked(crate::msg!(
                         "another akey process holds {}",
+                        "另一个 akey 进程持有 {}",
                         lock_path.display()
                     )));
                 }

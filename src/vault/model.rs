@@ -94,10 +94,16 @@ impl Vault {
             .filter(|e| e.name.eq_ignore_ascii_case(key))
             .collect();
         match hits.len() {
-            0 => Err(Error::not_found(format!("no entry named '{key}'"))),
+            0 => Err(Error::not_found(crate::msg!(
+                "no entry named '{}'",
+                "没有名为 '{}' 的条目",
+                key
+            ))),
             1 => Ok(hits[0]),
-            _ => Err(Error::Ambiguous(format!(
-                "'{key}' matches {} entries; use the ID",
+            _ => Err(Error::Ambiguous(crate::msg!(
+                "'{}' matches {} entries; use the ID",
+                "'{}' 匹配 {} 个条目；请使用 ID",
+                key,
                 hits.len()
             ))),
         }
@@ -119,9 +125,19 @@ impl Vault {
         let mut hits = self.tokens.values().filter(|t| t.name == name);
         let first = hits
             .next()
-            .ok_or_else(|| Error::not_found(format!("no token named '{name}'")))?;
+            .ok_or_else(|| {
+                Error::not_found(crate::msg!(
+                    "no token named '{}'",
+                    "没有名为 '{}' 的令牌",
+                    name
+                ))
+            })?;
         if hits.next().is_some() {
-            return Err(Error::Ambiguous(format!("multiple tokens named '{name}'")));
+            return Err(Error::Ambiguous(crate::msg!(
+                "multiple tokens named '{}'",
+                "存在多个名为 '{}' 的令牌",
+                name
+            )));
         }
         Ok(first)
     }

@@ -31,8 +31,13 @@ impl DeviceIdentity {
     /// Leading/trailing whitespace is allowed: `save` writes a trailing newline, so the content
     /// read back from the file is not a clean single line.
     pub fn parse(secret: &str, name: impl Into<String>) -> Result<Self> {
-        let identity = Identity::from_str(secret.trim())
-            .map_err(|why| Error::corrupt(format!("invalid device identity ({why})")))?;
+        let identity = Identity::from_str(secret.trim()).map_err(|why| {
+            Error::corrupt(crate::msg!(
+                "invalid device identity ({})",
+                "设备身份无效（{}）",
+                why
+            ))
+        })?;
         Ok(Self {
             identity,
             name: name.into(),
@@ -79,8 +84,14 @@ impl DeviceIdentity {
     pub fn load(path: &Path, name: impl Into<String>) -> Result<Self> {
         paths::ensure_private(path)?;
         let bytes = Zeroizing::new(paths::read_file(path)?);
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|e| Error::corrupt(format!("{} is not valid UTF-8: {e}", path.display())))?;
+        let text = std::str::from_utf8(&bytes).map_err(|e| {
+            Error::corrupt(crate::msg!(
+                "{} is not valid UTF-8: {}",
+                "{} 不是合法的 UTF-8：{}",
+                path.display(),
+                e
+            ))
+        })?;
         Self::parse(text, name)
     }
 }

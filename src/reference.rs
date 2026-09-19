@@ -49,8 +49,10 @@ impl Attribute {
             "title" => Ok(Attribute::Title),
             "type" => Ok(Attribute::Type),
             "id" => Ok(Attribute::Id),
-            _ => Err(Error::usage(format!(
-                "unknown attribute '{value}'; expected one of value, otp, title, type, id"
+            _ => Err(Error::usage(crate::msg!(
+                "unknown attribute '{}'; expected one of value, otp, title, type, id",
+                "未知属性 '{}'；可选值：value、otp、title、type、id",
+                value
             ))),
         }
     }
@@ -82,8 +84,10 @@ impl Reference {
         let body = match input.get(..SCHEME.len()) {
             Some(prefix) if prefix.eq_ignore_ascii_case(SCHEME) => &input[SCHEME.len()..],
             _ => {
-                return Err(Error::usage(format!(
-                    "'{input}' is not an akey:// reference"
+                return Err(Error::usage(crate::msg!(
+                    "'{}' is not an akey:// reference",
+                    "'{}' 不是 akey:// 引用",
+                    input
                 )));
             }
         };
@@ -99,8 +103,10 @@ impl Reference {
             [vault, item, field] => (*vault, *item, None, *field),
             [vault, item, section, field] => (*vault, *item, Some(*section), *field),
             _ => {
-                return Err(Error::usage(format!(
-                    "'{input}' has {} segments; expected akey://[vault/]item[/section]/field",
+                return Err(Error::usage(crate::msg!(
+                    "'{}' has {} segments; expected akey://[vault/]item[/section]/field",
+                    "'{}' 有 {} 段；应为 akey://[vault/]item[/section]/field",
+                    input,
                     segments.len()
                 )));
             }
@@ -148,11 +154,15 @@ fn is_segment_char(c: char) -> bool {
 /// A segment must be non-empty and hold only legal characters.
 fn validate_segment(segment: &str, input: &str) -> Result<()> {
     if segment.is_empty() {
-        return Err(Error::usage(format!("empty segment in '{input}'")));
+        return Err(Error::usage(crate::msg!("empty segment in '{}'", "'{}' 中存在空段", input)));
     }
     if let Some(bad) = segment.chars().find(|c| !is_segment_char(*c)) {
-        return Err(Error::usage(format!(
-            "invalid character '{bad}' in segment '{segment}' of '{input}'"
+        return Err(Error::usage(crate::msg!(
+            "invalid character '{}' in segment '{}' of '{}'",
+            "非法字符 '{}' 出现在段 '{}' 中（引用 '{}'）",
+            bad,
+            segment,
+            input
         )));
     }
     Ok(())
@@ -161,18 +171,24 @@ fn validate_segment(segment: &str, input: &str) -> Result<()> {
 /// Parse `?attribute=a&attribute=b`. An unknown parameter name, an unknown value, or a missing `=` → `usage`.
 fn parse_query(query: &str, input: &str) -> Result<Attribute> {
     if query.is_empty() {
-        return Err(Error::usage(format!("empty query in '{input}'")));
+        return Err(Error::usage(crate::msg!("empty query in '{}'", "'{}' 中存在空查询串", input)));
     }
     let mut attribute = Attribute::Value;
     for param in query.split('&') {
         let (key, value) = param.split_once('=').ok_or_else(|| {
-            Error::usage(format!(
-                "malformed query parameter '{param}' in '{input}'; expected key=value"
+            Error::usage(crate::msg!(
+                "malformed query parameter '{}' in '{}'; expected key=value",
+                "查询参数 '{}' 格式不对（引用 '{}'）；应为 key=value",
+                param,
+                input
             ))
         })?;
         if !key.eq_ignore_ascii_case("attribute") {
-            return Err(Error::usage(format!(
-                "unknown query parameter '{key}' in '{input}'; only 'attribute' is supported"
+            return Err(Error::usage(crate::msg!(
+                "unknown query parameter '{}' in '{}'; only 'attribute' is supported",
+                "未知查询参数 '{}'（引用 '{}'）；只支持 'attribute'",
+                key,
+                input
             )));
         }
         attribute = Attribute::parse_value(value)?;
@@ -213,7 +229,12 @@ fn expand_vars(input: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<Stri
         }
         let name = &tail[..len];
         let value = env(name).ok_or_else(|| {
-            Error::usage(format!("undefined variable '{name}' in reference '{input}'"))
+            Error::usage(crate::msg!(
+            "undefined variable '{}' in reference '{}'",
+            "未定义的变量 '{}'（引用 '{}'）",
+            name,
+            input
+        ))
         })?;
         out.push_str(&value);
         rest = &tail[len..];
@@ -240,16 +261,27 @@ pub fn find_field<'a>(entry: &'a Entry, reference: &Reference) -> Result<&'a Fie
     let hits: Vec<&Field> = entry.fields.iter().filter(|f| hit(f)).collect();
     match hits.len() {
         0 => Err(Error::not_found(match section {
-            Some(section) => format!(
-                "no field '{}' in section '{section}' of entry '{}'",
-                reference.field, entry.name
+            // Placeholders are filled positionally, so the Chinese keeps the English argument
+            // order (field, section, entry) rather than the order Chinese would prefer.
+            Some(section) => crate::msg!(
+                "no field '{}' in section '{}' of entry '{}'",
+                "没有字段 '{}'：段 '{}' · 条目 '{}'",
+                reference.field,
+                section,
+                entry.name
             ),
-            None => format!("no field '{}' in entry '{}'", reference.field, entry.name),
+            None => crate::msg!(
+                "no field '{}' in entry '{}'",
+                "没有字段 '{}'：条目 '{}'",
+                reference.field,
+                entry.name
+            ),
         })),
         1 => Ok(hits[0]),
-        n => Err(Error::Ambiguous(format!(
-            "'{}' matches {n} fields in entry '{}'; qualify with a section",
-            reference.field, entry.name
+        n => Err(Error::Ambiguous(crate::msg!(
+            "'{}' matches {} fields in entry '{}'; qualify with a section",
+            "'{}' 匹配 {} 个字段（条目 '{}'）；请用 section 限定",
+            reference.field, n, entry.name
         ))),
     }
 }
@@ -290,9 +322,16 @@ pub fn resolve(
 fn totp_at(value: &str, label: &str, now: DateTime<Utc>) -> Result<String> {
     // Do not echo the field value on error: it is the secret (the URI carries the base32 secret).
     let totp = totp_rs::Totp::from_url(value)
-        .map_err(|_| Error::usage(format!("field '{label}' is not a valid otpauth:// URI")))?;
+        .map_err(|_| Error::usage(crate::msg!(
+            "field '{}' is not a valid otpauth:// URI",
+            "字段 '{}' 不是合法的 otpauth:// URI",
+            label
+        )))?;
     let seconds = u64::try_from(now.timestamp()).map_err(|_| {
-        Error::crypto("cannot generate a TOTP for a timestamp before the unix epoch")
+        Error::crypto(crate::msg!(
+            "cannot generate a TOTP for a timestamp before the unix epoch",
+            "时间戳早于 unix 纪元，无法生成 TOTP"
+        ))
     })?;
     Ok(totp.generate(seconds).to_string())
 }

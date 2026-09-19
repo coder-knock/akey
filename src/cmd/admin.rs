@@ -86,9 +86,10 @@ fn read_passphrase(confirm: bool) -> Result<SecretString> {
         std::io::stdin().read_to_string(&mut raw)?;
         let line = raw.lines().next().unwrap_or("").to_string();
         if line.is_empty() {
-            return Err(Error::usage(
+            return Err(Error::usage(crate::msg!(
                 "no passphrase available: set AKEY_RECOVERY_PASSPHRASE or pipe it on stdin",
-            ));
+                "没有可用的恢复密码：请设置 AKEY_RECOVERY_PASSPHRASE，或通过 stdin 传入"
+            )));
         }
         return enforce_min(SecretString::from(line), confirm);
     }
@@ -97,7 +98,10 @@ fn read_passphrase(confirm: bool) -> Result<SecretString> {
     if confirm {
         let second = rpassword::prompt_password("Repeat passphrase: ")?;
         if first != second {
-            return Err(Error::usage("passphrases do not match"));
+            return Err(Error::usage(crate::msg!(
+                "passphrases do not match",
+                "两次输入的密码不一致"
+            )));
         }
     }
     enforce_min(SecretString::from(first), confirm)
@@ -110,8 +114,10 @@ fn read_passphrase(confirm: bool) -> Result<SecretString> {
 /// no longer be unlocked / rotated / bootstrapped, when it should still work.
 fn enforce_min(passphrase: SecretString, is_new: bool) -> Result<SecretString> {
     if is_new && passphrase.expose_secret().len() < MIN_PASSPHRASE_LEN {
-        return Err(Error::usage(format!(
-            "passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
+        return Err(Error::usage(crate::msg!(
+            "passphrase must be at least {} characters",
+            "恢复密码至少需要 {} 个字符",
+            MIN_PASSPHRASE_LEN
         )));
     }
     Ok(passphrase)
@@ -149,8 +155,9 @@ fn sanitise(device: &str) -> String {
 
 pub fn init(ctx: &Ctx, args: &InitArgs) -> Result<()> {
     if ctx.paths.has_config() {
-        return Err(Error::usage(format!(
+        return Err(Error::usage(crate::msg!(
             "already initialized at {}; to attach another repository use `akey init --from <url>`",
+            "已在 {} 初始化；要接入另一个仓库，请使用 `akey init --from <url>`",
             ctx.paths.config.display()
         )));
     }
@@ -227,9 +234,11 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
                 steps.push(format!("pushed to {remote}"))
             }
             crate::sync::PushOutcome::Rejected => {
-                return Err(Error::SyncFailed(format!(
-                    "the remote {remote} already has commits; refusing to overwrite — \
-                     use `akey init --from {remote}` to adopt it instead"
+                return Err(Error::SyncFailed(crate::msg!(
+                    "the remote {} already has commits; refusing to overwrite — \
+                     use `akey init --from {}` to adopt it instead",
+                    "远端 {} 已有提交；拒绝覆盖——请改用 `akey init --from {}` 接收它",
+                    remote, remote
                 )));
             }
         }
@@ -276,8 +285,9 @@ fn init_from_remote(
     };
 
     if repo.join(".git").is_dir() {
-        return Err(Error::usage(format!(
+        return Err(Error::usage(crate::msg!(
             "{} already contains a git repository; remove it first",
+            "{} 已包含一个 git 仓库；请先移除它",
             repo.display()
         )));
     }
@@ -286,8 +296,10 @@ fn init_from_remote(
 
     let recovery_path = repo.join(RECOVERY_FILE);
     if !recovery_path.is_file() {
-        return Err(Error::usage(format!(
-            "this vault has no {RECOVERY_FILE}; ask an operator to run `akey recovery set` first"
+        return Err(Error::usage(crate::msg!(
+            "this vault has no {}; ask an operator to run `akey recovery set` first",
+            "本金库没有 {}；请让运维人员先运行 `akey recovery set`",
+            RECOVERY_FILE
         )));
     }
     let recovered = crate::crypto::decrypt_with_passphrase(
@@ -295,16 +307,33 @@ fn init_from_remote(
         &fs::read(&recovery_path)?,
     )?;
     let recovery: RecoveryFile = serde_json::from_slice(&recovered)
-        .map_err(|e| Error::corrupt(format!("{RECOVERY_FILE} is malformed: {e}")))?;
+        .map_err(|e| Error::corrupt(crate::msg!(
+            "{} is malformed: {}",
+            "{} 格式不对：{}",
+            RECOVERY_FILE,
+            e
+        )))?;
     let bootstrap = DeviceIdentity::parse(&recovery.bootstrap_identity, "bootstrap")?;
 
     let vault_ciphertext = fs::read(repo.join(VAULT_FILE))
-        .map_err(|_| Error::corrupt(format!("{} is missing {VAULT_FILE}", repo.display())))?;
+        .map_err(|_| Error::corrupt(crate::msg!(
+            "{} is missing {}",
+            "{} 缺少 {}",
+            repo.display(),
+            VAULT_FILE
+        )))?;
     let vault_plain = bootstrap.decrypt(&vault_ciphertext).map_err(|_| {
-        Error::locked("recovery passphrase decrypts the bootstrap key but not the vault")
+        Error::locked(crate::msg!(
+            "recovery passphrase decrypts the bootstrap key but not the vault",
+            "恢复密码能解密引导密钥，但解不开金库"
+        ))
     })?;
     let vault: Vault = serde_json::from_slice(&vault_plain)
-        .map_err(|e| Error::corrupt(format!("vault is not valid JSON: {e}")))?;
+        .map_err(|e| Error::corrupt(crate::msg!(
+            "vault is not valid JSON: {}",
+            "金库不是合法的 JSON：{}",
+            e
+        )))?;
 
     let identity = DeviceIdentity::generate(device_name.clone());
     identity.save(&ctx.paths.identity)?;
@@ -456,9 +485,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
         DevicesCommand::Rm { name } => {
             ctx.gate_write()?;
             if *name == store.config.device_name {
-                return Err(Error::usage(format!(
-                    "refusing to remove this device ('{name}'): it would immediately lock this \
-                     machine out of the vault"
+                return Err(Error::usage(crate::msg!(
+                    "refusing to remove this device ('{}'): it would immediately lock this \
+                     machine out of the vault",
+                    "拒绝移除此设备（'{}'）：这会立刻让本机无法访问金库",
+                    name
                 )));
             }
             if ctx.dry_run {
@@ -501,13 +532,21 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
         DevicesCommand::Rename { old, new } => {
             ctx.gate_write()?;
             if !is_valid_name(new) {
-                return Err(Error::usage(format!("invalid device name '{new}'")));
+                return Err(Error::usage(crate::msg!(
+                    "invalid device name '{}'",
+                    "非法设备名 '{}'",
+                    new
+                )));
             }
             store.with_lock(|store| {
                 let mut recipients = store.load_recipients()?;
                 let (pubkey, _) = recipients
                     .find_by_name(old)
-                    .ok_or_else(|| Error::not_found(format!("no device named '{old}'")))?;
+                    .ok_or_else(|| Error::not_found(crate::msg!(
+                        "no device named '{}'",
+                        "没有名为 '{}' 的设备",
+                        old
+                    )))?;
                 let pubkey = pubkey.clone();
                 let mut record = recipients
                     .recipients
@@ -537,8 +576,10 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 .get(&pubkey)
                 .is_some_and(|record| record.is_active())
             {
-                return Err(Error::usage(format!(
-                    "'{name}' is revoked; re-add it with `akey devices add` before trusting it"
+                return Err(Error::usage(crate::msg!(
+                    "'{}' is revoked; re-add it with `akey devices add` before trusting it",
+                    "'{}' 已被吊销；请先用 `akey devices add` 重新添加后再信任它",
+                    name
                 )));
             }
             if ctx.dry_run {
@@ -569,9 +610,10 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             let recipients = store.load_recipients()?;
             let (pubkey, name) = resolve_recipient(&recipients, key)?;
             if pubkey == store.identity.pubkey() {
-                return Err(Error::usage(
+                return Err(Error::usage(crate::msg!(
                     "refusing to untrust this device: it would immediately lock this machine out",
-                ));
+                    "拒绝取消信任本设备：这会立刻让本机无法访问金库"
+                )));
             }
             if ctx.dry_run {
                 return ctx.out.emit(
@@ -604,13 +646,21 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
 fn resolve_recipient(recipients: &Recipients, key: &str) -> Result<(String, String)> {
     if key.starts_with("age1") {
         let record = recipients.recipients.get(key).ok_or_else(|| {
-            Error::not_found(format!("no recipient with public key '{key}'"))
+            Error::not_found(crate::msg!(
+                "no recipient with public key '{}'",
+                "没有公钥为 '{}' 的收件人",
+                key
+            ))
         })?;
         return Ok((key.to_string(), record.name.clone()));
     }
     let (pubkey, record) = recipients
         .find_by_name(key)
-        .ok_or_else(|| Error::not_found(format!("no recipient named '{key}'")))?;
+        .ok_or_else(|| Error::not_found(crate::msg!(
+            "no recipient named '{}'",
+            "没有名为 '{}' 的收件人",
+            key
+        )))?;
     Ok((pubkey.clone(), record.name.clone()))
 }
 
@@ -730,10 +780,11 @@ fn rotate_recovery(
     if current.expose_secret() == replacement.expose_secret() {
         // Non-interactively, both reads return the same environment variable, so the
         // command would spin for nothing and still report success.
-        return Err(Error::usage(
+        return Err(Error::usage(crate::msg!(
             "new passphrase is identical to the current one; set \
              AKEY_NEW_RECOVERY_PASSPHRASE to actually rotate",
-        ));
+            "新密码与当前密码相同；请设置 AKEY_NEW_RECOVERY_PASSPHRASE 才能真正轮换"
+        )));
     }
     let payload = decrypt_recovery(store, current)?;
     write_recovery(store, &payload, replacement)
@@ -741,16 +792,22 @@ fn rotate_recovery(
 
 fn decrypt_recovery(store: &Store, passphrase: &SecretString) -> Result<RecoveryFile> {
     if !store.recovery_path().is_file() {
-        return Err(Error::usage(
+        return Err(Error::usage(crate::msg!(
             "no recovery passphrase is configured; run `akey recovery set` first",
-        ));
+            "没有配置恢复密码；请先运行 `akey recovery set`"
+        )));
     }
     let plaintext = crate::crypto::decrypt_with_passphrase(
         passphrase,
         &fs::read(store.recovery_path())?,
     )?;
     serde_json::from_slice(&plaintext)
-        .map_err(|e| Error::corrupt(format!("{RECOVERY_FILE} is malformed: {e}")))
+        .map_err(|e| Error::corrupt(crate::msg!(
+            "{} is malformed: {}",
+            "{} 格式不对：{}",
+            RECOVERY_FILE,
+            e
+        )))
 }
 
 // ---------------------------------------------------------------- token
@@ -769,7 +826,11 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             // on the spot. Reproduced in practice.
             ctx.gate_write()?;
             if !is_valid_name(name) {
-                return Err(Error::usage(format!("invalid token name '{name}'")));
+                return Err(Error::usage(crate::msg!(
+                    "invalid token name '{}'",
+                    "非法令牌名 '{}'",
+                    name
+                )));
             }
             let now = Utc::now();
             let expires_at = match ttl {
@@ -863,7 +924,11 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
                     .tokens
                     .values()
                     .find(|t| &t.name == name)
-                    .ok_or_else(|| Error::not_found(format!("no token named '{name}'")))?;
+                    .ok_or_else(|| Error::not_found(crate::msg!(
+                        "no token named '{}'",
+                        "没有名为 '{}' 的令牌",
+                        name
+                    )))?;
                 let id = meta.id;
                 let meta = vault.tokens.get_mut(&id).expect("just found");
                 if meta.revoked_at.is_none() {

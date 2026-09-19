@@ -78,8 +78,10 @@ impl Git {
             .stdin(Stdio::null())
             .output()
             .map_err(|e| {
-                Error::Git(format!(
-                    "cannot run `git`: {e}; akey needs git on PATH for sync"
+                Error::Git(crate::msg!(
+                    "cannot run `git`: {}; akey needs git on PATH for sync",
+                    "无法运行 `git`：{}；akey 需要 PATH 中存在 git 才能同步",
+                    e
                 ))
             })
     }
@@ -107,10 +109,18 @@ impl Git {
             .env("LC_ALL", "C")
             .stdin(Stdio::null())
             .output()
-            .map_err(|e| Error::Git(format!("cannot run `git clone`: {e}")))?;
+            .map_err(|e| {
+                Error::Git(crate::msg!(
+                    "cannot run `git clone`: {}",
+                    "无法运行 `git clone`：{}",
+                    e
+                ))
+            })?;
         if !out.status.success() {
-            return Err(Error::SyncFailed(format!(
-                "git clone {url} failed: {}",
+            return Err(Error::SyncFailed(crate::msg!(
+                "git clone {} failed: {}",
+                "git clone {} 失败：{}",
+                url,
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
@@ -192,7 +202,13 @@ impl Git {
             ])
             .stdin(Stdio::null())
             .output()
-            .map_err(|e| Error::Git(format!("cannot run `git commit`: {e}")))?;
+            .map_err(|e| {
+                Error::Git(crate::msg!(
+                    "cannot run `git commit`: {}",
+                    "无法运行 `git commit`：{}",
+                    e
+                ))
+            })?;
 
         if out.status.success() {
             return Ok(true);
@@ -202,8 +218,9 @@ impl Git {
         if combined(&out).contains("nothing to commit") {
             return Ok(false);
         }
-        Err(Error::Git(format!(
+        Err(Error::Git(crate::msg!(
             "git commit failed: {}",
+            "git commit 失败：{}",
             combined(&out).trim()
         )))
     }
@@ -214,10 +231,17 @@ impl Git {
             .args(["fetch", "--quiet", "origin"])
             .stdin(Stdio::null())
             .output()
-            .map_err(|e| Error::Git(format!("cannot run `git fetch`: {e}")))?;
+            .map_err(|e| {
+                Error::Git(crate::msg!(
+                    "cannot run `git fetch`: {}",
+                    "无法运行 `git fetch`：{}",
+                    e
+                ))
+            })?;
         if !out.status.success() {
-            return Err(Error::SyncFailed(format!(
+            return Err(Error::SyncFailed(crate::msg!(
                 "git fetch failed: {}",
+                "git fetch 失败：{}",
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
@@ -267,8 +291,11 @@ impl Git {
     pub fn checkout_from(&self, rev: &str, path: &str) -> Result<()> {
         let out = self.output(&["checkout", rev, "--", path])?;
         if !out.status.success() {
-            return Err(Error::SyncFailed(format!(
-                "git checkout {rev} -- {path} failed: {}",
+            return Err(Error::SyncFailed(crate::msg!(
+                "git checkout {} -- {} failed: {}",
+                "git checkout {} -- {} 失败：{}",
+                rev,
+                path,
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
@@ -306,7 +333,13 @@ impl Git {
             .args(["push", "--porcelain", "origin", "HEAD"])
             .stdin(Stdio::null())
             .output()
-            .map_err(|e| Error::Git(format!("cannot run `git push`: {e}")))?;
+            .map_err(|e| {
+                Error::Git(crate::msg!(
+                    "cannot run `git push`: {}",
+                    "无法运行 `git push`：{}",
+                    e
+                ))
+            })?;
 
         let stdout = String::from_utf8_lossy(&out.stdout);
         let text = combined(&out);
@@ -328,8 +361,9 @@ impl Git {
         if is_non_fast_forward(&text) {
             return Ok(PushOutcome::Rejected);
         }
-        Err(Error::SyncFailed(format!(
+        Err(Error::SyncFailed(crate::msg!(
             "git push failed: {}",
+            "git push 失败：{}",
             text.trim()
         )))
     }
@@ -345,8 +379,9 @@ pub fn is_non_fast_forward(stderr: &str) -> bool {
 }
 
 fn git_failure(args: &[&str], out: &Output) -> Error {
-    Error::Git(format!(
+    Error::Git(crate::msg!(
         "git {} failed: {}",
+        "git {} 失败：{}",
         args.join(" "),
         combined(out).trim()
     ))

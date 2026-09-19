@@ -45,8 +45,9 @@ pub struct Config {
 impl Config {
     pub fn load(paths: &Paths) -> Result<Config> {
         if !paths.has_config() {
-            return Err(Error::locked(format!(
+            return Err(Error::locked(crate::msg!(
                 "no config at {}; run `akey init`",
+                "{} 处没有配置；请运行 `akey init`",
                 paths.config.display()
             )));
         }

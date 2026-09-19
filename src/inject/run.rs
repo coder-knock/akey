@@ -85,8 +85,9 @@ pub fn resolve(
     for bundle in bundles {
         let entry = require_env_bundle(vault, bundle)?;
         if entry.fields.is_empty() {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::msg!(
                 "env-bundle '{}' has no fields to inject",
+                "env-bundle '{}' 没有可注入的字段",
                 entry.name
             )));
         }
@@ -100,8 +101,11 @@ pub fn resolve(
             Some((name, raw)) => {
                 let name = name.trim();
                 if !is_env_var_name(name) {
-                    return Err(Error::usage(format!(
-                        "--with '{spec}': '{name}' is not a valid environment variable name"
+                    return Err(Error::usage(crate::msg!(
+                        "--with '{}': '{}' is not a valid environment variable name",
+                        "--with '{}'：'{}' 不是合法的环境变量名",
+                        spec,
+                        name
                     )));
                 }
                 (name.to_string(), with_value(vault, raw, &mut plaintexts)?)
@@ -155,7 +159,12 @@ pub fn touch(
         let content = std::fs::read_to_string(path).map_err(|e| {
             Error::Io(std::io::Error::new(
                 e.kind(),
-                format!("cannot read env file {}: {e}", path.display()),
+                crate::msg!(
+                    "cannot read env file {}: {}",
+                    "无法读取环境变量文件 {}：{}",
+                    path.display(),
+                    e
+                ),
             ))
         })?;
         for raw in reference::extract_references(&content) {
@@ -262,14 +271,21 @@ pub fn parse_dotenv(label: &str, input: &str) -> Result<Vec<(String, String)>> {
             _ => line,
         };
         let Some((key, value)) = line.split_once('=') else {
-            return Err(Error::usage(format!(
-                "{label}:{lineno}: expected `NAME=value`"
+            return Err(Error::usage(crate::msg!(
+                "{}:{}: expected `NAME=value`",
+                "{}:{}：应为 `NAME=value`",
+                label,
+                lineno
             )));
         };
         let key = key.trim();
         if !is_env_var_name(key) {
-            return Err(Error::usage(format!(
-                "{label}:{lineno}: '{key}' is not a valid environment variable name"
+            return Err(Error::usage(crate::msg!(
+                "{}:{}: '{}' is not a valid environment variable name",
+                "{}:{}：'{}' 不是合法的环境变量名",
+                label,
+                lineno,
+                key
             )));
         }
         out.push((key.to_string(), unquote(value.trim())));
@@ -294,15 +310,19 @@ fn with_value(
 fn default_secret(entry: &Entry) -> Result<Zeroizing<String>> {
     let label = entry.category.default_secret_field();
     if label.is_empty() {
-        return Err(Error::usage(format!(
+        return Err(Error::usage(crate::msg!(
             "entry '{}' is an env-bundle and has no single secret field; use `--bundle {}`",
-            entry.name, entry.name
+            "条目 '{}' 是 env-bundle，没有单一秘密字段；请使用 `--bundle {}`",
+            entry.name,
+            entry.name
         )));
     }
     let field = entry.field(label).ok_or_else(|| {
-        Error::not_found(format!(
+        Error::not_found(crate::msg!(
             "entry '{}' has no '{}' field to inject",
-            entry.name, label
+            "条目 '{}' 没有可注入的 '{}' 字段",
+            entry.name,
+            label
         ))
     })?;
     Ok(Zeroizing::new(field.value().to_string()))
@@ -312,9 +332,11 @@ fn default_secret(entry: &Entry) -> Result<Zeroizing<String>> {
 fn require_env_bundle<'a>(vault: &'a Vault, item: &str) -> Result<&'a Entry> {
     let entry = vault.find(item)?;
     if entry.category != Category::EnvBundle {
-        return Err(Error::usage(format!(
+        return Err(Error::usage(crate::msg!(
             "entry '{}' is a {}, not an env-bundle; use `--with` for single values",
-            entry.name, entry.category
+            "条目 '{}' 是 {}，不是 env-bundle；单个值请使用 `--with`",
+            entry.name,
+            entry.category
         )));
     }
     Ok(entry)
@@ -370,11 +392,15 @@ fn resolve_ref(vault: &Vault, raw: &str, now: DateTime<Utc>) -> Result<String> {
     match reference::resolve(vault, &reference, now) {
         Ok(value) => Ok(value.to_string()),
         // Name the reference text so an agent knows what to fix; the message holds names only, no values.
-        Err(Error::NotFound(msg)) => Err(Error::not_found(format!(
-            "cannot resolve '{raw}': {msg}"
+        Err(Error::NotFound(msg)) => Err(Error::not_found(crate::msg!(
+            "cannot resolve '{}': {}",
+            "无法解析 '{}'：{}",
+            raw, msg
         ))),
-        Err(Error::Ambiguous(msg)) => Err(Error::Ambiguous(format!(
-            "cannot resolve '{raw}': {msg}"
+        Err(Error::Ambiguous(msg)) => Err(Error::Ambiguous(crate::msg!(
+            "cannot resolve '{}': {}",
+            "无法解析 '{}'：{}",
+            raw, msg
         ))),
         Err(other) => Err(other),
     }
@@ -390,7 +416,12 @@ fn load_env_file(path: &Path) -> Result<Vec<(String, String)>> {
     let raw = std::fs::read_to_string(path).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
-            format!("cannot read env file {}: {e}", path.display()),
+            crate::msg!(
+                "cannot read env file {}: {}",
+                "无法读取环境变量文件 {}：{}",
+                path.display(),
+                e
+            ),
         ))
     })?;
     parse_dotenv(&path.display().to_string(), &raw)
@@ -461,7 +492,12 @@ enum ChildIo {
 fn spawn_child(command: &[String], injection: &Injection, io: ChildIo) -> Result<i32> {
     let (program, args) = command
         .split_first()
-        .ok_or_else(|| Error::usage("no command to run; expected `akey run … -- <command>`"))?;
+        .ok_or_else(|| {
+            Error::usage(crate::msg!(
+                "no command to run; expected `akey run … -- <command>`",
+                "没有要运行的命令；应为 `akey run … -- <command>`"
+            ))
+        })?;
     let mut child = Command::new(program);
     child.args(args);
     for (name, value) in &injection.vars {
@@ -501,7 +537,10 @@ fn spawn_child(command: &[String], injection: &Injection, io: ChildIo) -> Result
 
 /// After `Stdio::piped()` the `take()` cannot fail; failing to get a pipe can only be an internal error.
 fn missing_pipe() -> Error {
-    Error::Io(std::io::Error::other("child output pipe was not created"))
+    Error::Io(std::io::Error::other(crate::msg!(
+        "child output pipe was not created",
+        "未创建子进程的输出管道"
+    )))
 }
 
 /// Reap a reader thread. A panicking thread or a failed write must be reported; the only
@@ -512,9 +551,10 @@ fn join_relay(handle: std::thread::JoinHandle<std::io::Result<()>>) -> Result<()
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Ok(Err(e)) => Err(Error::Io(e)),
-        Err(_) => Err(Error::Io(std::io::Error::other(
+        Err(_) => Err(Error::Io(std::io::Error::other(crate::msg!(
             "output relay thread panicked",
-        ))),
+            "输出中继线程发生 panic"
+        )))),
     }
 }
 

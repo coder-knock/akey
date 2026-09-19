@@ -81,7 +81,7 @@ pub fn get(ctx: &Ctx, args: &GetArgs) -> Result<()> {
 pub fn set(ctx: &Ctx, args: &SetArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.item.is_empty() {
-        return Err(Error::usage("set needs an item name"));
+        return Err(Error::usage(crate::msg!("set needs an item name", "`set` 需要一个条目名")));
     }
     let plan = SetPlan::from_args(args)?;
     let store = ctx.store()?;
@@ -195,7 +195,10 @@ pub fn edit(ctx: &Ctx, args: &EditArgs) -> Result<()> {
 pub fn rm(ctx: &Ctx, args: &RmArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.items.is_empty() {
-        return Err(Error::usage("rm needs at least one item"));
+        return Err(Error::usage(crate::msg!(
+            "rm needs at least one item",
+            "`rm` 至少需要一个条目"
+        )));
     }
     let store = ctx.store()?;
     let now = Utc::now();
@@ -220,7 +223,10 @@ pub fn rm(ctx: &Ctx, args: &RmArgs) -> Result<()> {
 pub fn restore(ctx: &Ctx, args: &RestoreArgs) -> Result<()> {
     ctx.gate_write()?;
     if args.items.is_empty() {
-        return Err(Error::usage("restore needs at least one item"));
+        return Err(Error::usage(crate::msg!(
+            "restore needs at least one item",
+            "`restore` 至少需要一个条目"
+        )));
     }
     let store = ctx.store()?;
     let now = Utc::now();
@@ -438,9 +444,10 @@ pub fn resolve(ctx: &Ctx, args: &ResolveArgs) -> Result<()> {
         (true, false) => Side::Ours,
         (false, true) => Side::Theirs,
         _ => {
-            return Err(Error::usage(
+            return Err(Error::usage(crate::msg!(
                 "resolve needs exactly one of --ours or --theirs",
-            ));
+                "`resolve` 需要且仅需要 --ours 或 --theirs 之一"
+            )));
         }
     };
     let store = ctx.store()?;
@@ -628,7 +635,14 @@ fn select_fields<'a>(entry: &'a Entry, wanted: &[String]) -> Result<Vec<&'a Fiel
     for label in wanted {
         let field = entry
             .field(label)
-            .ok_or_else(|| Error::not_found(format!("entry '{}' has no field '{label}'", entry.name)))?;
+            .ok_or_else(|| {
+                Error::not_found(crate::msg!(
+                    "entry '{}' has no field '{}'",
+                    "条目 '{}' 没有字段 '{}'",
+                    entry.name,
+                    label
+                ))
+            })?;
         selected.push(field);
     }
     Ok(selected)
@@ -803,16 +817,21 @@ fn parse_field_type(raw: &str, spec: &str) -> Result<FieldType> {
     if let Some(ty) = ASSIGNABLE_TYPES.iter().find(|ty| ty.as_str() == normalized) {
         return Ok(*ty);
     }
-    Err(Error::usage(format!(
-        "unknown field type '{raw}' in '{spec}'; expected one of string, concealed, email, url, otp, date, number, file, ssh-key, notes"
+    Err(Error::usage(crate::msg!(
+        "unknown field type '{}' in '{}'; expected one of string, concealed, email, url, otp, date, number, file, ssh-key, notes",
+        "字段类型 '{}' 未知（位于 '{}' 中）；应为 string、concealed、email、url、otp、date、number、file、ssh-key、notes 之一",
+        raw,
+        spec
     )))
 }
 
 /// Parse `[section.]field[type]=value`; `value == [delete]` means delete that field.
 fn parse_assignment(spec: &str) -> Result<Assignment> {
     let (lhs, raw_value) = split_unescaped(spec, '=').ok_or_else(|| {
-        Error::usage(format!(
-            "assignment '{spec}' is missing '='; expected [section.]field[[type]]=value"
+        Error::usage(crate::msg!(
+            "assignment '{}' is missing '='; expected [section.]field[[type]]=value",
+            "赋值 '{}' 缺少 '='；应为 [section.]field[[type]]=value",
+            spec
         ))
     })?;
 
@@ -827,8 +846,10 @@ fn parse_assignment(spec: &str) -> Result<Assignment> {
                 .map(|inner| inner.strip_suffix(']').unwrap_or(inner))
                 .filter(|inner| !inner.is_empty() && !inner.contains(['[', ']']));
             let inner = inner.ok_or_else(|| {
-                Error::usage(format!(
-                    "malformed type suffix in '{spec}'; expected field[type]=value"
+                Error::usage(crate::msg!(
+                    "malformed type suffix in '{}'; expected field[type]=value",
+                    "赋值 '{}' 的类型后缀格式不对；应为 field[type]=value",
+                    spec
                 ))
             })?;
             (head, Some(parse_field_type(inner, spec)?))
@@ -839,8 +860,10 @@ fn parse_assignment(spec: &str) -> Result<Assignment> {
     let (section, label) = match split_unescaped(head, '.') {
         Some((section, label)) => {
             if section.is_empty() {
-                return Err(Error::usage(format!(
-                    "assignment '{spec}' has an empty section"
+                return Err(Error::usage(crate::msg!(
+                    "assignment '{}' has an empty section",
+                    "赋值 '{}' 的 section 为空",
+                    spec
                 )));
             }
             (Some(unescape(section)), unescape(label))
@@ -848,8 +871,10 @@ fn parse_assignment(spec: &str) -> Result<Assignment> {
         None => (None, unescape(head)),
     };
     if label.is_empty() {
-        return Err(Error::usage(format!(
-            "assignment '{spec}' has an empty field name"
+        return Err(Error::usage(crate::msg!(
+            "assignment '{}' has an empty field name",
+            "赋值 '{}' 的字段名为空",
+            spec
         )));
     }
 
@@ -955,7 +980,10 @@ fn read_stdin() -> Result<String> {
 fn apply_stdin(entry: &mut Entry, text: &str, secret_field: Option<&str>) -> Result<()> {
     let body = text.trim_end_matches(['\n', '\r']);
     if body.trim().is_empty() {
-        return Err(Error::usage("--stdin received no input"));
+        return Err(Error::usage(crate::msg!(
+            "--stdin received no input",
+            "`--stdin` 没有收到输入"
+        )));
     }
     if body.lines().any(|line| line.contains('=')) {
         for line in body.lines() {
@@ -973,8 +1001,9 @@ fn apply_stdin(entry: &mut Entry, text: &str, secret_field: Option<&str>) -> Res
         _ => {
             let default = entry.category.default_secret_field();
             if default.is_empty() {
-                return Err(Error::usage(format!(
+                return Err(Error::usage(crate::msg!(
                     "category '{}' has no default secret field; pass --secret-field",
+                    "分类 '{}' 没有默认秘密字段；请传 --secret-field",
                     entry.category
                 )));
             }
@@ -1023,13 +1052,18 @@ fn parse_recipe(raw: &str) -> Result<Recipe> {
             other => match other.parse::<usize>() {
                 Ok(n) if n > 0 && n <= MAX_PASSWORD_LEN => len = Some(n),
                 Ok(n) => {
-                    return Err(Error::usage(format!(
-                        "password length {n} out of range; expected 1..={MAX_PASSWORD_LEN}"
+                    return Err(Error::usage(crate::msg!(
+                        "password length {} out of range; expected 1..={}",
+                        "密码长度 {} 超出范围；应为 1..={}",
+                        n,
+                        MAX_PASSWORD_LEN
                     )));
                 }
                 Err(_) => {
-                    return Err(Error::usage(format!(
-                        "unknown password recipe token '{token}'; expected letters, digits, symbols or a length"
+                    return Err(Error::usage(crate::msg!(
+                        "unknown password recipe token '{}'; expected letters, digits, symbols or a length",
+                        "无法识别的密码配方项 '{}'；应为 letters、digits、symbols 或一个长度",
+                        token
                     )));
                 }
             },
@@ -1203,10 +1237,21 @@ fn read_template(path: &Path) -> Result<EntryTemplate> {
     // Use std::fs instead of paths::read_file: the latter is for akey's **own** files, and it reads
     // a missing file as "the repo is not initialized, go run akey init" — nonsense for a user-supplied template path.
     let bytes = std::fs::read(path).map_err(|e| {
-        Error::usage(format!("cannot read template {}: {e}", path.display()))
+        Error::usage(crate::msg!(
+            "cannot read template {}: {}",
+            "无法读取模板 {}：{}",
+            path.display(),
+            e
+        ))
     })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|e| Error::usage(format!("template {} is not valid JSON: {e}", path.display())))
+    serde_json::from_slice(&bytes).map_err(|e| {
+        Error::usage(crate::msg!(
+            "template {} is not valid JSON: {}",
+            "模板 {} 不是合法的 JSON：{}",
+            path.display(),
+            e
+        ))
+    })
 }
 
 /// The output of `template get <category>`: a skeleton of the built-in fields with empty values.
@@ -1249,8 +1294,9 @@ fn skeleton(id: Ulid, name: String, category: Category, now: DateTime<Utc>) -> E
 /// A write command cannot revive a soft-deleted entry in place; `restore` first, then edit.
 fn writable_entry(vault: &Vault, key: &str) -> Result<Option<Entry>> {
     match vault.find(key) {
-        Ok(entry) if entry.is_deleted() => Err(Error::usage(format!(
+        Ok(entry) if entry.is_deleted() => Err(Error::usage(crate::msg!(
             "entry '{}' is deleted; run `akey restore {}` first",
+            "条目 '{}' 已删除；请先运行 `akey restore {}`",
             entry.name, entry.name
         ))),
         Ok(entry) => Ok(Some(entry.clone())),
@@ -1274,9 +1320,10 @@ struct SetPlan {
 impl SetPlan {
     fn from_args(args: &SetArgs) -> Result<SetPlan> {
         if args.stdin && args.generate_password.is_some() {
-            return Err(Error::usage(
+            return Err(Error::usage(crate::msg!(
                 "--stdin and --generate-password cannot be combined",
-            ));
+                "`--stdin` 与 `--generate-password` 不能同时使用"
+            )));
         }
         let assignments = args
             .assignments
@@ -1314,9 +1361,11 @@ struct SetOutcome {
 
 fn apply_set(vault: &mut Vault, plan: &SetPlan, now: DateTime<Utc>) -> Result<SetOutcome> {
     if !is_valid_name(&plan.name) {
-        return Err(Error::usage(format!(
-            "invalid entry name '{}': expected ^[a-z0-9][a-z0-9._-]*$ with at most {MAX_NAME_LEN} chars",
-            plan.name
+        return Err(Error::usage(crate::msg!(
+            "invalid entry name '{}': expected ^[a-z0-9][a-z0-9._-]*$ with at most {} chars",
+            "非法条目名 '{}'：应为 ^[a-z0-9][a-z0-9._-]*$，最多 {} 个字符",
+            plan.name,
+            MAX_NAME_LEN
         )));
     }
     let existing = writable_entry(vault, &plan.name)?;
@@ -1362,8 +1411,9 @@ fn apply_set(vault: &mut Vault, plan: &SetPlan, now: DateTime<Utc>) -> Result<Se
             .clone()
             .unwrap_or_else(|| entry.category.default_secret_field().to_string());
         if label.is_empty() {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::msg!(
                 "category '{}' has no default secret field; pass --secret-field",
+                "分类 '{}' 没有默认秘密字段；请传 --secret-field",
                 entry.category
             )));
         }
@@ -1404,7 +1454,10 @@ struct EditPlan {
 impl EditPlan {
     fn from_args(args: &EditArgs) -> Result<EditPlan> {
         if args.favorite && args.unfavorite {
-            return Err(Error::usage("--favorite and --unfavorite cannot be combined"));
+            return Err(Error::usage(crate::msg!(
+                "--favorite and --unfavorite cannot be combined",
+                "`--favorite` 与 `--unfavorite` 不能同时使用"
+            )));
         }
         let assignments = args
             .assignments
@@ -1430,9 +1483,10 @@ impl EditPlan {
             assignments,
         };
         if !plan.changes_anything() {
-            return Err(Error::usage(
+            return Err(Error::usage(crate::msg!(
                 "nothing to change; pass assignments or one of --title/--tags/--favorite/--unfavorite/--rotate/--reveal-policy/--template",
-            ));
+                "没有可改的内容；请传赋值，或 --title/--tags/--favorite/--unfavorite/--rotate/--reveal-policy/--template 之一"
+            )));
         }
         Ok(plan)
     }
@@ -1456,8 +1510,13 @@ struct EditOutcome {
 }
 
 fn apply_edit(vault: &mut Vault, plan: &EditPlan, now: DateTime<Utc>) -> Result<EditOutcome> {
-    let mut entry = writable_entry(vault, &plan.item)?
-        .ok_or_else(|| Error::not_found(format!("no entry named '{}'", plan.item)))?;
+    let mut entry = writable_entry(vault, &plan.item)?.ok_or_else(|| {
+        Error::not_found(crate::msg!(
+            "no entry named '{}'",
+            "没有名为 '{}' 的条目",
+            plan.item
+        ))
+    })?;
     // Same rule as `apply_set`: only a real change may move `updated_at`, because that field
     // decides merge winners and names conflict copies.
     let before = entry.clone();
@@ -1570,14 +1629,16 @@ impl BatchReport {
         }
         let succeeded = self.succeeded();
         let (_, first) = &self.failed[0];
-        let head = format!(
-            "{} of {} item(s) failed ({first}); {}",
+        let head = crate::msg!(
+            "{} of {} item(s) failed ({}); {}",
+            "{} / {} 个条目失败（{}）；{}",
             self.failed.len(),
             self.failed.len() + succeeded.len(),
+            first,
             if succeeded.is_empty() {
-                "nothing was changed".to_string()
+                crate::msg!("nothing was changed", "没有做任何改动")
             } else {
-                format!("succeeded: {}", succeeded.join(", "))
+                crate::msg!("succeeded: {}", "成功：{}", succeeded.join(", "))
             }
         );
         Err(match first.code() {
@@ -1637,8 +1698,10 @@ fn apply_restore(vault: &mut Vault, items: &[String], now: DateTime<Utc>) -> Bat
         if vault.name_taken(&name, id) {
             report.fail(
                 item,
-                Error::usage(format!(
-                    "cannot restore '{name}': another entry already uses that name; rename one of them first"
+                Error::usage(crate::msg!(
+                    "cannot restore '{}': another entry already uses that name; rename one of them first",
+                    "无法恢复 '{}'：另一个条目已使用该名字；请先重命名其中一个",
+                    name
                 )),
             );
             continue;
@@ -1668,14 +1731,18 @@ fn apply_cp(
     now: DateTime<Utc>,
 ) -> Result<CpOutcome> {
     if !is_valid_name(destination) {
-        return Err(Error::usage(format!(
-            "invalid entry name '{destination}': expected ^[a-z0-9][a-z0-9._-]*$"
+        return Err(Error::usage(crate::msg!(
+            "invalid entry name '{}': expected ^[a-z0-9][a-z0-9._-]*$",
+            "非法条目名 '{}'：应为 ^[a-z0-9][a-z0-9._-]*$",
+            destination
         )));
     }
     let origin = vault.find(source)?.clone();
     if vault.entries.values().any(|e| e.name == destination) {
-        return Err(Error::usage(format!(
-            "entry '{destination}' already exists; pick another name"
+        return Err(Error::usage(crate::msg!(
+            "entry '{}' already exists; pick another name",
+            "条目 '{}' 已存在；请换一个名字",
+            destination
         )));
     }
     let mut copy = origin.clone();
@@ -1705,14 +1772,18 @@ struct MvOutcome {
 
 fn apply_mv(vault: &mut Vault, old: &str, new: &str, now: DateTime<Utc>) -> Result<MvOutcome> {
     if !is_valid_name(new) {
-        return Err(Error::usage(format!(
-            "invalid entry name '{new}': expected ^[a-z0-9][a-z0-9._-]*$"
+        return Err(Error::usage(crate::msg!(
+            "invalid entry name '{}': expected ^[a-z0-9][a-z0-9._-]*$",
+            "非法条目名 '{}'：应为 ^[a-z0-9][a-z0-9._-]*$",
+            new
         )));
     }
     let entry = vault.find(old)?.clone();
     if entry.name != new && vault.name_taken(new, entry.id) {
-        return Err(Error::usage(format!(
-            "entry '{new}' already exists; pick another name"
+        return Err(Error::usage(crate::msg!(
+            "entry '{}' already exists; pick another name",
+            "条目 '{}' 已存在；请换一个名字",
+            new
         )));
     }
     let outcome = MvOutcome {
@@ -1842,7 +1913,11 @@ fn conflict_target(vault: &Vault, key: &str) -> Result<String> {
             return Ok(candidate.to_string());
         }
     }
-    Err(Error::not_found(format!("no entry named '{key}'")))
+    Err(Error::not_found(crate::msg!(
+        "no entry named '{}'",
+        "没有名为 '{}' 的条目",
+        key
+    )))
 }
 
 fn apply_resolve(
@@ -1857,7 +1932,13 @@ fn apply_resolve(
         .values()
         .find(|e| e.name == base)
         .map(|e| e.id)
-        .ok_or_else(|| Error::not_found(format!("no entry named '{base}'")))?;
+        .ok_or_else(|| {
+            Error::not_found(crate::msg!(
+                "no entry named '{}'",
+                "没有名为 '{}' 的条目",
+                base
+            ))
+        })?;
 
     let prefix = format!("{base}{CONFLICT_MARK}");
     let mut copies: Vec<(Ulid, String, DateTime<Utc>)> = vault
@@ -1867,8 +1948,10 @@ fn apply_resolve(
         .map(|entry| (entry.id, entry.name.clone(), entry.updated_at))
         .collect();
     if copies.is_empty() {
-        return Err(Error::usage(format!(
-            "no conflict copy found for '{base}'; run `akey conflicts` first"
+        return Err(Error::usage(crate::msg!(
+            "no conflict copy found for '{}'; run `akey conflicts` first",
+            "没有找到 '{}' 的冲突副本；请先运行 `akey conflicts`",
+            base
         )));
     }
     // With several copies, take the newest one, the name as tiebreaker, so the result is reproducible.
@@ -1878,12 +1961,24 @@ fn apply_resolve(
         .entries
         .get(&source_id)
         .cloned()
-        .ok_or_else(|| Error::not_found(format!("conflict copy '{source_name}' vanished")))?;
+        .ok_or_else(|| {
+            Error::not_found(crate::msg!(
+                "conflict copy '{}' vanished",
+                "冲突副本 '{}' 已消失",
+                source_name
+            ))
+        })?;
 
     let entry = vault
         .entries
         .get_mut(&base_id)
-        .ok_or_else(|| Error::not_found(format!("no entry named '{base}'")))?;
+        .ok_or_else(|| {
+            Error::not_found(crate::msg!(
+                "no entry named '{}'",
+                "没有名为 '{}' 的条目",
+                base
+            ))
+        })?;
     if side == Side::Theirs {
         entry.category = source.category;
         entry.title = source.title.clone();

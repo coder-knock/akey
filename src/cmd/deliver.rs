@@ -128,11 +128,13 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> Result<()> {
 
     // Masking is exactly how "run never hands plaintext to the caller" is implemented; turning it off means giving that promise up.
     if args.no_masking && ctx.plaintext_forbidden(&vault)? {
-        return Err(Error::denied(
+        return Err(Error::denied(crate::msg!(
             "--no-masking would let the child's output reach you in the clear; it is refused \
              while AKEY_NO_REVEAL is set or this token carries --deny-reveal. Keep masking on, \
              or ask an operator to change the policy",
-        ));
+            "--no-masking 会让子进程的输出以明文送达你手中；当 AKEY_NO_REVEAL 已设置或本令牌带有 \
+             --deny-reveal 时，这一点会被拒绝。请保持遮蔽，或请运维人员修改策略"
+        )));
     }
 
     // Authorization comes before decryption: a restricted token must not inject entries from outside its scope into a child process.
@@ -177,7 +179,7 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
     let input = match &args.in_file {
-        Some(path) => read_text_file(path, "template")?,
+        Some(path) => read_text_file(path, &crate::msg!("template", "模板"))?,
         None => read_stdin()?,
     };
 
@@ -243,7 +245,7 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
 /// only the entries it is authorized for, otherwise `--allow` would be meaningless.
 pub fn export(ctx: &Ctx, args: &ExportArgs) -> Result<()> {
     // Block on confirmation before touching the vault: without `--yes` the data should not even be read.
-    ctx.confirm("export plaintext")?;
+    ctx.confirm(crate::i18n::m("export plaintext", "导出明文"))?;
 
     let store = ctx.store()?;
     let vault = store.load()?;
@@ -260,12 +262,22 @@ pub fn export(ctx: &Ctx, args: &ExportArgs) -> Result<()> {
         .map(|entry| entry.name.as_str())
         .collect();
     if !denied.is_empty() {
-        return Err(Error::denied(format!(
+        // English pluralises the noun with a suffix, which Chinese cannot carry on the noun it
+        // renders; the suffix is therefore the localized unit and the noun moves into each
+        // template. The argument order stays (count, noun, names) in both languages.
+        let noun = if denied.len() == 1 {
+            crate::msg!("y is", "条目")
+        } else {
+            crate::msg!("ies are", "条目")
+        };
+        return Err(Error::denied(crate::msg!(
             "{} entr{} marked reveal=deny would be written out in the clear: {}. \
              Flip the policy explicitly with `akey edit <name> --reveal-policy allow` \
              if dumping it is really intended",
+            "{} 个{}被标记 reveal=deny，将被明文写出：{}。若确实要导出，请显式用 \
+             `akey edit <name> --reveal-policy allow` 翻转策略",
             denied.len(),
-            if denied.len() == 1 { "y is" } else { "ies are" },
+            noun,
             denied.join(", ")
         )));
     }
@@ -463,7 +475,10 @@ pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
     let vault = store.load()?;
 
     let (source, text) = match &args.in_file {
-        Some(path) => (path.display().to_string(), read_text_file(path, "import file")?),
+        Some(path) => (
+            path.display().to_string(),
+            read_text_file(path, &crate::msg!("import file", "导入文件"))?,
+        ),
         None => ("stdin".to_string(), read_stdin()?),
     };
     let incoming = match args.encoding {
@@ -529,15 +544,21 @@ fn parse_import(format: ExportFormat, label: &str, text: &str) -> Result<Vec<Ent
     match format {
         ExportFormat::Json => parse_import_json(label, text),
         ExportFormat::Csv1p => parse_import_csv(label, text),
-        ExportFormat::Dotenv => Err(Error::usage(
+        ExportFormat::Dotenv => Err(Error::usage(crate::msg!(
             "dotenv imports need a name; they are parsed by entry, not here",
-        )),
+            "dotenv 导入需要一个条目名；它们按条目解析，不在这里处理"
+        ))),
     }
 }
 
 fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
     let mut value: Value = serde_json::from_str(text)
-        .map_err(|e| Error::usage(format!("{label}: not valid JSON: {e}")))?;
+        .map_err(|e| Error::usage(crate::msg!(
+            "{}: not valid JSON: {}",
+            "{}：不是合法的 JSON：{}",
+            label,
+            e
+        )))?;
 
     if value.is_array() {
         if let Some(items) = value.as_array_mut() {
@@ -546,7 +567,12 @@ fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
             }
         }
         return serde_json::from_value(value)
-            .map_err(|e| Error::usage(format!("{label}: not a list of entries: {e}")));
+            .map_err(|e| Error::usage(crate::msg!(
+                "{}: not a list of entries: {}",
+                "{}：不是条目列表：{}",
+                label,
+                e
+            )));
     }
 
     let has_entries = match value.get_mut("entries").and_then(Value::as_object_mut) {
@@ -560,12 +586,19 @@ fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
     };
     if has_entries {
         let vault: Vault = serde_json::from_value(value)
-            .map_err(|e| Error::usage(format!("{label}: not a vault document: {e}")))?;
+            .map_err(|e| Error::usage(crate::msg!(
+                "{}: not a vault document: {}",
+                "{}：不是金库文档：{}",
+                label,
+                e
+            )))?;
         return Ok(vault.entries.into_values().collect());
     }
 
-    Err(Error::usage(format!(
-        "{label}: expected a vault document (`{{\"entries\": …}}`) or a list of entries"
+    Err(Error::usage(crate::msg!(
+        "{}: expected a vault document (`{{\"entries\": …}}`) or a list of entries",
+        "{}：应为金库文档（`{{\"entries\": …}}`）或条目列表",
+        label
     )))
 }
 
@@ -597,7 +630,11 @@ fn parse_import_dotenv(name: &str, label: &str, text: &str) -> Result<Vec<Entry>
         values.insert(key, value);
     }
     if values.is_empty() {
-        return Err(Error::usage(format!("{label}: no variables to import")));
+        return Err(Error::usage(crate::msg!(
+            "{}: no variables to import",
+            "{}：没有可导入的环境变量",
+            label
+        )));
     }
 
     let mut entry = Entry::new(
@@ -645,7 +682,11 @@ fn import_entry_name(path: Option<&Path>) -> String {
 fn parse_import_csv(label: &str, text: &str) -> Result<Vec<Entry>> {
     let rows = parse_csv(text);
     let Some(header) = rows.first() else {
-        return Err(Error::usage(format!("{label}: empty CSV")));
+        return Err(Error::usage(crate::msg!(
+            "{}: empty CSV",
+            "{}：CSV 为空",
+            label
+        )));
     };
     let column = |want: &str| {
         header
@@ -653,7 +694,11 @@ fn parse_import_csv(label: &str, text: &str) -> Result<Vec<Entry>> {
             .position(|h| h.trim().eq_ignore_ascii_case(want))
     };
     let title_col = column("title")
-        .ok_or_else(|| Error::usage(format!("{label}: 1Password CSV needs a Title column")))?;
+        .ok_or_else(|| Error::usage(crate::msg!(
+            "{}: 1Password CSV needs a Title column",
+            "{}：1Password CSV 需要 Title 列",
+            label
+        )))?;
     let username_col = column("username");
     let password_col = column("password");
     let url_col = column("url");
@@ -707,7 +752,11 @@ fn parse_import_csv(label: &str, text: &str) -> Result<Vec<Entry>> {
     }
 
     if entries.is_empty() {
-        return Err(Error::usage(format!("{label}: no rows to import")));
+        return Err(Error::usage(crate::msg!(
+            "{}: no rows to import",
+            "{}：没有可导入的行",
+            label
+        )));
     }
     Ok(entries)
 }
@@ -756,21 +805,24 @@ fn plan_import(vault: &Vault, incoming: Vec<Entry>, merge: bool) -> Result<Impor
 
     for mut entry in incoming {
         if !is_valid_name(&entry.name) {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::msg!(
                 "imported entry name '{}' is not a valid akey name (lowercase letters, digits, `.`, `_`, `-`)",
+                "导入的条目名 '{}' 不是合法的 akey 名称（小写字母、数字以及 `.`、`_`、`-`）",
                 entry.name
             )));
         }
         if !seen.insert(entry.name.clone()) {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::msg!(
                 "the import file contains '{}' twice",
+                "导入文件中包含 '{}' 两次",
                 entry.name
             )));
         }
         match vault.entries.values().find(|e| e.name == entry.name) {
             Some(_) if !merge => {
-                return Err(Error::usage(format!(
+                return Err(Error::usage(crate::msg!(
                     "entry '{}' already exists; pass --merge to overwrite its fields",
+                    "条目 '{}' 已存在；传 --merge 可覆盖其字段",
                     entry.name
                 )));
             }
@@ -920,7 +972,10 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
     // Tokens are read-only credentials: write operations are always refused.
     ctx.gate_write()?;
     if label.trim().is_empty() {
-        return Err(Error::usage("--field must not be empty"));
+        return Err(Error::usage(crate::msg!(
+            "--field must not be empty",
+            "--field 不能为空"
+        )));
     }
 
     let store = ctx.store()?;
@@ -930,7 +985,7 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
     let bytes = std::fs::read(file).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
-            format!("cannot read {}: {e}", file.display()),
+            crate::msg!("cannot read {}: {}", "无法读取 {}：{}", file.display(), e),
         ))
     })?;
     let encoded = STANDARD.encode(&bytes);
@@ -954,7 +1009,11 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
         let entry = vault
             .entries
             .get_mut(&id)
-            .ok_or_else(|| Error::not_found(format!("no entry named '{name}'")))?;
+            .ok_or_else(|| Error::not_found(crate::msg!(
+                "no entry named '{}'",
+                "没有名为 '{}' 的条目",
+                name
+            )))?;
         match entry.field_mut(label) {
             Some(existing) => {
                 existing.ty = FieldType::File;
@@ -985,8 +1044,9 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
 fn require_attachment_field<'a>(entry: &'a Entry, reference: &Reference) -> Result<&'a Field> {
     let field = reference::find_field(entry, reference)?;
     if field.ty != FieldType::File {
-        return Err(Error::usage(format!(
+        return Err(Error::usage(crate::msg!(
             "field '{}' of '{}' is a {}, not a file attachment; use `akey read`",
+            "字段 '{}'（条目 '{}'）是 {}，不是文件附件；请改用 `akey read`",
             field.label,
             entry.name,
             field.ty
@@ -1000,7 +1060,9 @@ fn decode_attachment(encoded: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(trimmed)
         .or_else(|_| URL_SAFE_NO_PAD.decode(trimmed))
-        .map_err(|_| Error::corrupt("attachment is not valid base64"))
+        .map_err(|_| {
+            Error::corrupt(crate::msg!("attachment is not valid base64", "附件不是合法的 base64"))
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,7 +1373,13 @@ fn read_text_file(path: &Path, what: &str) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
-            format!("cannot read {what} {}: {e}", path.display()),
+            crate::msg!(
+                "cannot read {} {}: {}",
+                "无法读取{} {}：{}",
+                what,
+                path.display(),
+                e
+            ),
         ))
     })
 }

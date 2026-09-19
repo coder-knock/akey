@@ -156,8 +156,9 @@ impl Store {
     /// Decrypt the vault. This is the entry point for every read command.
     pub fn load(&self) -> Result<Vault> {
         let ciphertext = paths::read_file(&self.vault_path()).map_err(|e| match e {
-            Error::Locked(_) => Error::Locked(format!(
+            Error::Locked(_) => Error::Locked(crate::msg!(
                 "no vault at {}; run `akey init` or `akey init --from <url>`",
+                "{} 处没有金库；请运行 `akey init` 或 `akey init --from <url>`",
                 self.vault_path().display()
             )),
             other => other,
@@ -168,17 +169,27 @@ impl Store {
     /// Decrypt from in-memory ciphertext (sync decrypts historical versions this way).
     pub fn open_ciphertext(&self, ciphertext: &[u8]) -> Result<Vault> {
         let plaintext = self.identity.decrypt(ciphertext).map_err(|e| {
-            Error::Locked(format!(
-                "{e}; device '{}' may have been removed with `akey devices rm`",
+            Error::Locked(crate::msg!(
+                "{}; device '{}' may have been removed with `akey devices rm`",
+                "{}；设备 '{}' 可能已被 `akey devices rm` 移除",
+                e,
                 self.identity.name()
             ))
         })?;
         let vault: Vault = serde_json::from_slice(&plaintext)
-            .map_err(|e| Error::Corrupt(format!("vault decrypted but is not valid JSON: {e}")))?;
+            .map_err(|e| {
+                Error::Corrupt(crate::msg!(
+                    "vault decrypted but is not valid JSON: {}",
+                    "金库已解密但不是合法的 JSON：{}",
+                    e
+                ))
+            })?;
         if vault.version > FORMAT_VERSION {
-            return Err(Error::Unsupported(format!(
-                "vault format v{} is newer than this build supports (v{FORMAT_VERSION}); upgrade akey",
-                vault.version
+            return Err(Error::Unsupported(crate::msg!(
+                "vault format v{} is newer than this build supports (v{}); upgrade akey",
+                "金库格式 v{} 比本构建支持的版本（v{}）更新；请升级 akey",
+                vault.version,
+                FORMAT_VERSION
             )));
         }
         Ok(vault)
@@ -206,13 +217,25 @@ impl Store {
             // trust case is the security-relevant one: it is a local config edit, whereas the
             // membership case means someone changed the repository.
             let reason = if recipients.recipients.contains_key(&me) {
-                format!("this device ({me}) is no longer in the local trust set")
+                crate::msg!(
+                    "this device ({}) is no longer in the local trust set",
+                    "本设备（{}）已不在本地信任集合中",
+                    me
+                )
             } else {
-                format!("this device ({me}) is not a recipient in {RECIPIENTS_FILE}")
+                crate::msg!(
+                    "this device ({}) is not a recipient in {}",
+                    "本设备（{}）不是 {} 中的收件人",
+                    me,
+                    RECIPIENTS_FILE
+                )
             };
-            return Err(Error::locked(format!(
-                "{reason}; refusing to write a vault this device could not reopen — \
-                 run `akey devices trust {me}`"
+            return Err(Error::locked(crate::msg!(
+                "{}; refusing to write a vault this device could not reopen — \
+                 run `akey devices trust {}`",
+                "{}；拒绝写入本设备无法重新打开的金库——请运行 `akey devices trust {}`",
+                reason,
+                me
             )));
         }
 

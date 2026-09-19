@@ -44,12 +44,20 @@ pub fn issue(
     now: DateTime<Utc>,
 ) -> Result<IssuedToken> {
     if !is_valid_name(name) {
-        return Err(Error::Usage(format!("非法令牌名 `{name}`")));
+        return Err(Error::Usage(crate::msg!(
+            "invalid token name `{}`",
+            "非法令牌名 `{}`",
+            name
+        )));
     }
     if let Some(list) = &allow {
         for entry in list {
             if !is_valid_name(entry) {
-                return Err(Error::Usage(format!("`--allow` 中的条目名 `{entry}` 非法")));
+                return Err(Error::Usage(crate::msg!(
+                    "invalid entry name `{}` in `--allow`",
+                    "`--allow` 中的条目名 `{}` 非法",
+                    entry
+                )));
             }
         }
     }
@@ -88,7 +96,11 @@ pub fn verify(candidate: &str, meta: &TokenMeta) -> Result<()> {
     if matches {
         Ok(())
     } else {
-        Err(Error::Locked(format!("令牌无效：`{}`", meta.name)))
+        Err(Error::Locked(crate::msg!(
+            "token is not valid: `{}`",
+            "令牌无效：`{}`",
+            meta.name
+        )))
     }
 }
 
@@ -97,15 +109,25 @@ pub fn verify(candidate: &str, meta: &TokenMeta) -> Result<()> {
 /// Revoked / expired → `locked` (4); not in the `allow` list → `token_scope` (8).
 pub fn authorize(meta: &TokenMeta, entry_name: &str, now: DateTime<Utc>) -> Result<()> {
     if meta.revoked_at.is_some() {
-        return Err(Error::Locked(format!("令牌 `{}` 已吊销", meta.name)));
+        return Err(Error::Locked(crate::msg!(
+            "token `{}` is revoked",
+            "令牌 `{}` 已吊销",
+            meta.name
+        )));
     }
     if meta.expires_at.is_some_and(|exp| exp <= now) {
-        return Err(Error::Locked(format!("令牌 `{}` 已过期", meta.name)));
+        return Err(Error::Locked(crate::msg!(
+            "token `{}` has expired",
+            "令牌 `{}` 已过期",
+            meta.name
+        )));
     }
     if !meta.permits(entry_name) {
-        return Err(Error::TokenScope(format!(
-            "令牌 `{}` 无权访问条目 `{entry_name}`",
-            meta.name
+        return Err(Error::TokenScope(crate::msg!(
+            "token `{}` is not authorized for entry `{}`",
+            "令牌 `{}` 无权访问条目 `{}`",
+            meta.name,
+            entry_name
         )));
     }
     Ok(())
@@ -119,9 +141,10 @@ pub fn normalize(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     let body = trimmed.strip_prefix(TOKEN_PREFIX).unwrap_or(trimmed);
     if !is_token_body(body) {
-        return Err(Error::Usage(
-            "令牌格式不对：应为 43 位 base64url 字符，可带 `akey_` 前缀".into(),
-        ));
+        return Err(Error::Usage(crate::msg!(
+            "malformed token: expected 43 base64url characters, optionally with an `akey_` prefix",
+            "令牌格式不对：应为 43 位 base64url 字符，可带 `akey_` 前缀"
+        )));
     }
     Ok(body.to_string())
 }
