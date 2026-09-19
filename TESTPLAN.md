@@ -15,63 +15,66 @@
 
 | 需求 | 测试 | 层 | 断言什么 |
 |---|---|---|---|
-| FR-1 条目模型 | `model::name_validation` | U | 合法名通过；大写/空格/前导 `-` 拒绝 |
-| FR-1 | `model::field_concealed` | U | `Concealed/Notes/SshKey` → true，其余 false |
-| FR-3 信封 | `contract::success_envelope` | C | stdout 是 `{"ok":true,"data":…}` 合法 JSON |
-| FR-3 | `contract::error_envelope` | C | 失败时 stdout 为空、stderr 有诊断、退出码正确 |
-| FR-3 | `contract::stdout_stderr_separation` | C | 诊断绝不污染 stdout（用管道分别抓取） |
-| FR-3 | `contract::exit_codes` | C | 12 个错误场景各自映射到 2/3/4/5/6/7/8/1 |
-| FR-3 | `contract::no_prompt_non_tty` | C | 非 TTY 下任何命令不阻塞等待输入（超时即失败） |
-| FR-3 | `contract::idempotent_set` | C | 同 `set` 连跑两次，vault 字节稳定（除时间戳） |
-| FR-4 暴露控制 | `contract::get_conceals_by_default` | C | `get` 输出含 `••••`，且**不含**明文串 |
-| FR-4 | `contract::get_reveal_requires_policy` | C | `reveal=deny` 时 `--reveal` 退出 7 |
-| FR-4 | `contract::no_reveal_env` | C | `AKEY_NO_REVEAL=1` 下 `--reveal` 退出 7 |
-| FR-4 | `contract::get_exposes_reference` | C | 隐藏值的同时给出 `reference` 串 |
-| FR-5 引用 | `reference::parse_table` | U | 表驱动：合法/非法、可选 vault、section、query |
-| FR-5 | `reference::var_interpolation` | U | `$APP_ENV` 展开；未定义变量 → usage |
-| FR-5 | `reference::resolve_by_id_and_name` | U | 名字与 ID 都能命中；均不存在 → not_found |
-| FR-5 | `reference::ambiguous_section` | U | 同名跨 section → ambiguous |
-| FR-6 注入 | `inject::env_injection` | C | 子进程读到明文；调用者 stdout 无明文 |
-| FR-6 | `inject::env_file` | C | `--env-file` 中的引用被解析 |
-| FR-6 | `inject::precedence` | C | env-file 覆盖 shell 环境变量 |
-| FR-6 | `inject::exit_code_passthrough` | C | 子进程退 42 → akey 退 42 |
+| FR-1 条目模型 | `model::name_validation_accepts_and_rejects_expected_forms` | U | 合法名通过；大写/空格/前导 `-` 拒绝 |
+| FR-1 | `model::concealed_types_cover_secret_bearing_fields` | U | `Concealed/Notes/SshKey` → true，其余 false |
+| FR-3 信封 | `contract::json_success_is_a_single_ok_envelope_on_stdout` | C | stdout 是 `{"ok":true,"data":…}` 合法 JSON |
+| FR-3 | `contract::failure_writes_nothing_to_stdout` | C | 失败时 stdout 为空、stderr 有诊断、退出码正确 |
+| FR-3 | `contract::human_mode_keeps_diagnostics_off_stdout` | C | 诊断绝不污染 stdout（用管道分别抓取） |
+| FR-3 | `contract::exit_codes_match_the_documented_contract` | C | 12 个错误场景各自映射到 2/3/4/5/6/7/8/1 |
+| FR-3 | `contract::commands_never_block_waiting_for_input` | C | 非 TTY 下任何命令不阻塞等待输入（超时即失败） |
+| FR-3 | **未实现** | C | 同 `set` 连跑两次，vault 字节稳定（除时间戳） |
+| FR-4 暴露控制 | `contract::get_conceals_secrets_and_exposes_references_instead` | C | `get` 输出含 `••••`，且**不含**明文串 |
+| FR-4 | `contract::entry_can_be_pinned_to_deny_reveal` | C | `reveal=deny` 时 `--reveal` 退出 7 |
+| FR-4 | `contract::inject_cannot_route_around_a_global_reveal_ban` | C | `AKEY_NO_REVEAL=1` 下 `--reveal` 退出 7（run 侧另见 `contract::run_refuses_no_masking_while_reveal_is_forbidden`） |
+| FR-4 | `contract::get_conceals_secrets_and_exposes_references_instead` | C | 隐藏值的同时给出 `reference` 串 |
+| FR-5 引用 | `reference::parse_table_accepts_valid_forms` | U | 表驱动：合法/非法、可选 vault、section、query（拒绝用例见 `reference::parse_table_rejects_invalid_forms`） |
+| FR-5 | `reference::parse_in_expands_variables` | U | `$APP_ENV` 展开；未定义变量 → usage |
+| FR-5 | `reference::resolve_returns_each_attribute` | U | 名字与 ID 都能命中；均不存在 → not_found（ID 单列见 `reference::resolve_by_id_reference_addresses_the_same_entry`） |
+| FR-5 | `reference::find_field_is_section_scoped` | U | 同名跨 section → ambiguous |
+| FR-6 注入 | `contract::run_injects_a_secret_into_the_child_and_masks_any_echo` | C | 子进程读到明文；调用者 stdout 无明文 |
+| FR-6 | `contract::run_reads_references_out_of_an_env_file` | C | `--env-file` 中的引用被解析 |
+| FR-6 | `run::precedence_is_with_then_bundle_then_env_file_then_process_env` | C | env-file 覆盖 shell 环境变量 |
+| FR-6 | `contract::run_passes_through_the_child_exit_code` | C | 子进程退 42 → akey 退 42 |
 | FR-7 遮蔽 | `mask::same_chunk` | U | 单块内的密钥被替换 |
-| FR-7 | `mask::split_across_chunks` | U | 密钥被 1 字节/边界切分仍被替换（核心回归） |
+| FR-7 | `mask::split_across_chunks_byte_by_byte` | U | 密钥被 1 字节/边界切分仍被替换（核心回归） |
 | FR-7 | `mask::short_values_untouched` | U | 长度 < 8 的值不被遮蔽（避免毁掉 "true"） |
-| FR-7 | `mask::no_masking_flag` | C | `--no-masking` 原文透出 |
-| FR-8 同步 | `e2e::two_devices_converge` | E | A 写→push；B pull 后可见同值 |
-| FR-8 | `e2e::disjoint_changes_automerge` | E | 两端各加一条 → 同步后两条都在，无冲突 |
-| FR-8 | `e2e::no_op_sync` | E | 无变化时 `sync` 报 `up_to_date` 且不产生提交 |
-| FR-9 冲突 | `merge::rule_table` | U | 需求 §11.1 七条规则逐条断言 |
-| FR-9 | `merge::determinism` | U | 同输入跑 100 次字节一致 |
-| FR-9 | `merge::conflict_id_reproducible` | U | 两台设备独立合并同一分歧 → 冲突条目 **ID 相同** |
-| FR-9 | `merge::delete_vs_edit_keeps_edit` | U | 一边删一边改 → 保留改动且标记冲突 |
-| FR-9 | `merge::purge_tombstone` | U | purge 过的条目不会被对端复活 |
-| FR-9 | `e2e::same_entry_conflict` | E | 两端改同一条 → 双方值都还在，`conflicts` 有记录 |
-| FR-9 | `e2e::resolve_take_theirs` | E | `resolve --theirs` 后冲突消失且值正确 |
-| FR-10 设备 | `crypto::identity_roundtrip` | U | 生成→序列化→解析 → 同一公钥 |
-| FR-10 | `crypto::identity_perms` | U | `identity.key` 落盘为 0600 |
-| FR-10 | `e2e::device_revoke` | E | `devices rm B` 后，B 用旧身份无法解密新 vault（退出 4） |
-| FR-10 | `e2e::device_add_roundtrip` | E | `devices add` 后新设备可解密 |
-| FR-11 恢复 | `crypto::recovery_roundtrip` | U | passphrase 加密→解密得回引导身份 |
-| FR-11 | `e2e::bootstrap_from_remote` | E | 空机器 `init --from <repo>` + 恢复密码 → 全部条目可用 |
-| FR-11 | `e2e::wrong_recovery_passphrase` | E | 错误密码 → 退出 4，不留下半成品状态 |
-| FR-12 审计 | `audit::no_plaintext` | U | 日志行永不包含任何字段值 |
-| FR-12 | `contract::audit_records_read` | C | `read` 后日志新增一条，含条目 ID 不含值 |
-| FR-15 令牌 | `token::verify_and_scope` | U | 正确令牌通过；错误令牌拒绝；过期拒绝 |
-| FR-15 | `token::allow_list_enforced` | C | 令牌未授权条目 → 退出 8 |
-| FR-15 | `token::scope_blocks_write` | C | 带令牌执行 `set/edit/rm/resolve` → 退出 7（令牌只读） |
-| FR-15 | `token::scope_cannot_be_bypassed_by_injection` | C | 受限令牌 `run --with X=akey://<越权条目>/credential -- sh -c 'echo $X'` → 退出 8 且无明文（关键回归） |
-| FR-15 | `token::export_is_scoped` | C | 带令牌 `export` 只含作用域内条目 |
-| FR-15 | `token::deny_reveal` | C | 带 `--deny-reveal` 的令牌做 `--reveal` → 退出 7 |
-| FR-15 | `contract::token_shown_once` | C | `token create` 输出明文一次；`token list` 不含明文 |
-| FR-16 MCP | `contract::mcp_no_values` | C | `mcp` 的 list 工具响应**不含**任何明文值 |
-| FR-17 AGENTS.md | `contract::agents_md_shipped` | C | 仓库根有 `AGENTS.md` 且含 `akey run` 示例 |
-| FR-13 医生 | `contract::doctor_json` | C | 输出含 `identity/remote/permissions/conflicts/tokens` 段 |
-| NFR-5 原子性 | `store::atomic_write_crash` | U | 写到一半失败 → 原文件完好，无残留临时文件 |
-| NFR-5 | `store::lock_excludes` | U | 持锁时第二个写操作超时 → `locked` |
-| NFR-2 性能 | `bench::hot_path`（`--ignored`） | U | `get` 单次 < 100ms（10³ 条目 vault） |
-| NFR-9 日志 | `.*::no_secret_in_any_output` | C | 见 §3 的全局断言 |
+| FR-7 | `run::unmasked_output_passes_the_plaintext_through` | C | `--no-masking` 原文透出 |
+| FR-8 同步 | `e2e::a_second_device_reads_what_the_first_stored` | E | A 写→push；B pull 后可见同值 |
+| FR-8 | `e2e::edits_to_different_entries_merge_without_conflict` | E | 两端各加一条 → 同步后两条都在，无冲突 |
+| FR-8 | `e2e::a_second_sync_with_nothing_to_do_reports_up_to_date` | E | 无变化时 `sync` 报 `up_to_date` 且不产生提交 |
+| FR-9 冲突 | `merge::rule_both_changed_differently_keeps_ours_and_copies_theirs` | U | 需求 §11.1 七条规则逐条断言（逐条用例为 merge::rule_* 一组，此处取冲突规则） |
+| FR-9 | `merge::determinism_same_input_same_bytes` | U | 同输入跑 100 次字节一致 |
+| FR-9 | `merge::conflict_id_reproducible_across_devices` | U | 两台设备独立合并同一分歧 → 冲突条目 **ID 相同** |
+| FR-9 | `merge::delete_vs_edit_keeps_edit_and_records_conflict` | U | 一边删一边改 → 保留改动且标记冲突 |
+| FR-9 | `merge::purge_tombstone_suppresses_resurrection` | U | purge 过的条目不会被对端复活 |
+| FR-9 | `e2e::conflicting_edits_keep_both_sides_and_are_resolvable` | E | 两端改同一条 → 双方值都还在，`conflicts` 有记录 |
+| FR-9 | `e2e::conflicting_edits_keep_both_sides_and_are_resolvable` | E | `resolve --theirs` 后冲突消失且值正确（同上一条用例的后半段；单元层见 `entries::conflicts_and_resolve_both_sides`） |
+| FR-21 信任集合 | `e2e::an_injected_recipient_never_receives_ciphertext` | E | 远端写权限者塞进 `recipients.json` 的公钥被报为 pending，且始终退出 4、零明文（**A1 回归**） |
+| FR-21 | `e2e::trusting_a_recipient_lets_it_decrypt` | E | `devices trust` 后可读；`devices untrust` 后新密文又读不到 |
+| FR-21 | `store::refuses_to_write_when_this_device_is_untrusted` | U | 本机不在信任集合时拒绝写入 |
+| FR-10 设备 | `identity::generate_save_load_keeps_the_same_pubkey` | U | 生成→序列化→解析 → 同一公钥 |
+| FR-10 | `identity::save_writes_0600_and_load_rejects_other_readable_file` | U | `identity.key` 落盘为 0600 |
+| FR-10 | `e2e::a_revoked_device_can_no_longer_open_the_vault` | E | `devices rm B` 后，B 用旧身份无法解密新 vault（退出 4） |
+| FR-10 | `e2e::a_second_device_reads_what_the_first_stored` | E | `devices add` 后新设备可解密（夹具中第二台设备经 `init --from` 加入、`devices trust` 后才可读） |
+| FR-11 恢复 | `admin::recovery_unlock_verifies_the_bootstrap_can_open_the_vault` | U | passphrase 加密→解密得回引导身份 |
+| FR-11 | `e2e::a_second_device_reads_what_the_first_stored` | E | 空机器 `init --from <repo>` + 恢复密码 → 全部条目可用（夹具 `pair()` 即此路径） |
+| FR-11 | `e2e::a_wrong_recovery_passphrase_cannot_join` | E | 错误密码 → 退出 4，不留下半成品状态 |
+| FR-12 审计 | `audit::log_never_contains_secret_material` | U | 日志行永不包含任何字段值 |
+| FR-12 | `contract::audit_log_records_actions_without_secrets` | C | `read` 后日志新增一条，含条目 ID 不含值 |
+| FR-15 令牌 | `token::issued_token_verifies_and_wrong_token_is_rejected` | U | 正确令牌通过；错误令牌拒绝；过期拒绝（过期/吊销另见 `token::expired_and_revoked_tokens_are_locked`） |
+| FR-15 | `contract::token_scope_violation_is_exit_8` | C | 令牌未授权条目 → 退出 8 |
+| FR-15 | `contract::a_token_cannot_write` | C | 带令牌执行 `set/edit/rm/resolve` → 退出 7（令牌只读） |
+| FR-15 | `contract::token_scope_cannot_be_bypassed_by_injection` | C | 受限令牌 `run --with X=akey://<越权条目>/credential -- sh -c 'echo $X'` → 退出 8 且无明文（关键回归） |
+| FR-15 | `contract::export_under_a_token_only_covers_the_scope` | C | 带令牌 `export` 只含作用域内条目 |
+| FR-15 | `contract::inject_cannot_route_around_a_deny_reveal_token` | C | 带 `--deny-reveal` 的令牌做 `--reveal` → 退出 7 |
+| FR-15 | `admin::token_create_shows_plaintext_once_and_list_never_does` | C | `token create` 输出明文一次；`token list` 不含明文 |
+| FR-16 MCP | `contract::mcp_speaks_json_rpc_and_never_returns_values` | C | `mcp` 的 list 工具响应**不含**任何明文值 |
+| FR-17 AGENTS.md | `contract::init_ships_agent_documentation_into_the_vault_repo` | C | 仓库根有 `AGENTS.md` 且含 `akey run` 示例 |
+| FR-13 医生 | **未实现** | C | 输出含 `identity/remote/permissions/conflicts/tokens` 段 |
+| NFR-5 原子性 | `paths::replacing_a_file_never_exposes_a_partial_state` | U | 写到一半失败 → 原文件完好，无残留临时文件（残留文件检查见 `paths::atomic_write_leaves_no_temp_files_behind`） |
+| NFR-5 | **未实现** | U | 持锁时第二个写操作超时 → `locked` |
+| NFR-2 性能 | `store::hot_path_stays_under_100ms_with_a_thousand_entries`（`--ignored`） | U | `get` 单次 < 100ms（10³ 条目 vault） |
+| NFR-9 日志 | `contract::list_never_carries_field_values` | C | 见 §3 的全局断言（无单条聚合用例，由各契约用例与 `audit::log_never_contains_secret_material` 内联断言） |
 
 ## 2. 端到端夹具
 
@@ -109,3 +112,13 @@ struct Device { home: TempDir, repo: TempDir, bin: assert_cmd::Command }
 - 不测 clap 的 help 文案（除非它是契约的一部分：`schema` 输出）。
 - 不做 UI/快照测试；不做覆盖率数字目标。
 - 不 mock `git`：mock 会掩盖真实的凭据/分叉行为。
+
+## 6. 尚未实现的测试
+
+下表是 §1 中标注 **未实现** 的行：这些行为目前没有任何测试覆盖，这里记下写代码前的原计划名，以及它本该断言什么。
+
+| 需求 | 原计划的测试名 | 该断言什么 |
+|---|---|---|
+| FR-3 信封（幂等 set） | contract::idempotent_set | 同一条 `set` 连跑两次不得产生第二条条目：条目 ID 与 `created_at` 不变（幂等重放）。原计划的"vault 字节稳定"无法断言——age 密文每次都随机化（见 `boxcrypto::encrypting_twice_yields_different_ciphertexts`）；目前只有 `entries::set_creates_then_updates_in_place` 覆盖"第二次 `set` 原地更新"这一半。 |
+| FR-13 医生 | contract::doctor_json | `akey doctor --json` 的输出含 `identity`、`remote`、`permissions`、`conflicts`、`tokens` 各段及各自状态。`doctor` 现在只出现在 `contract::schema_is_machine_readable_and_complete` 的命令表和 `contract::commands_never_block_waiting_for_input` 的不阻塞清单里。 |
+| NFR-5 原子性 | store::lock_excludes | 第一个写者持锁时，第二个写操作在 `LOCK_TIMEOUT`（`src/paths.rs`，10s）后返回 `locked`。`with_write_lock` 已实现该路径，但没有任何测试制造竞争：`paths::write_lock_serialises_and_runs_closure` 只跑了一次闭包。 |
