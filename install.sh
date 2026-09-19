@@ -20,7 +20,7 @@ set -eu
 
 REPO="coder-knock/akey"
 BIN="akey"
-MIN_RUST="1.85"          # edition 2024
+MIN_RUST="1.88"          # set by the dependency tree (totp-rs)
 
 # Overridable so the script can be tested against a local "release" directory.
 DIST_BASE="${AKEY_DIST_BASE:-https://github.com/${REPO}/releases/download}"
@@ -187,7 +187,7 @@ install_from_source() {
 or use a platform with a prebuilt binary."
 
     rustc_version=$(rustc --version 2>/dev/null | awk '{print $2}') || rustc_version=""
-    say "${DIM}    rustc ${rustc_version:-unknown} (need >= ${MIN_RUST} for edition 2024)${RESET}"
+    say "${DIM}    rustc ${rustc_version:-unknown} (need >= ${MIN_RUST})${RESET}"
 
     step "building from source (this takes a couple of minutes)"
     # An empty VERSION means "the default branch", not "the tag called empty string": passing

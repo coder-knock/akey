@@ -65,16 +65,17 @@ jobs:
           Write-Host 'install.ps1 parses'
 
   # `rust-version` in Cargo.toml is a promise to users, so it is built rather than asserted. The
-  # crate needs 1.85 for edition 2024; anything newer only shows up here.
+  # floor comes from the dependency tree (`totp-rs`, and its `url` -> `idna` -> `icu_*` chain),
+  # not from edition 2024 — the gap between 1.85 and 1.88 is exactly what this job catches.
   msrv:
-    name: rust 1.85 (MSRV)
+    name: rust 1.88 (MSRV)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install the minimum supported toolchain
-        run: rustup toolchain install 1.85 --profile minimal
+        run: rustup toolchain install 1.88 --profile minimal
       - name: Build
-        run: cargo +1.85 build --locked --all-targets
+        run: cargo +1.88 build --locked --all-targets
 
   # Advisories against the dependency tree. Not part of `test`: this is the one check whose failure
   # is usually not the author's fault, and it should be readable as its own signal.

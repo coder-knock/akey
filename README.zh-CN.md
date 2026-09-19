@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/coder-knock/akey/main/install.sh | 
 irm https://raw.githubusercontent.com/coder-knock/akey/main/install.ps1 | iex
 ```
 
-**从源码**，任何装了 [Rust](https://rustup.rs) ≥ 1.85 的平台：
+**从源码**，任何装了 [Rust](https://rustup.rs) ≥ 1.88 的平台：
 
 ```bash
 cargo install --git https://github.com/coder-knock/akey --locked

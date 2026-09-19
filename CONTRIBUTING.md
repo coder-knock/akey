@@ -16,7 +16,7 @@ pull request. Issues and pull requests are welcome in **English or Chinese**.
 
 ## Setup
 
-Rust **1.85 or newer** (the crate uses edition 2024). `git` is needed for `akey sync` and for the
+Rust **1.88 or newer** — set by the dependency tree rather than by edition 2024, which would need only 1.85. `git` is needed for `akey sync` and for the
 test suite; nothing else.
 
 ```bash

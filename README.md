@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/coder-knock/akey/main/install.sh | 
 irm https://raw.githubusercontent.com/coder-knock/akey/main/install.ps1 | iex
 ```
 
-**From source**, on any platform with [Rust](https://rustup.rs) ≥ 1.85:
+**From source**, on any platform with [Rust](https://rustup.rs) ≥ 1.88:
 
 ```bash
 cargo install --git https://github.com/coder-knock/akey --locked

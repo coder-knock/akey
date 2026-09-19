@@ -3,3 +3,6 @@
 
 # Archify verification sidecars (regenerable: archify visual-check)
 docs/diagrams/*.visual-check.*
+
+# Local release packaging (see .github/workflows/release.yml)
+/dist
