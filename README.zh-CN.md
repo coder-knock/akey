@@ -136,19 +136,43 @@ akey devices trust laptop
 
 ## 图表
 
-三张可交互图。每张都是一个独立的 HTML 文件、内联 SVG —— 用浏览器打开即可平移、缩放、搜索、
-沿关系追踪、切换明暗主题，并导出 PNG 或 SVG。三张都由仓库里的 JSON 规格生成，所以是**重新生成**
-而不是手改。
+三张图，各有中英两版。全部由仓库里的 JSON 规格生成——**重新生成**而非手改——并各附带一个
+独立 HTML（内联 SVG）：用浏览器打开即可平移、缩放、搜索、沿关系追踪、切换明暗主题，以及导出
+PNG 或 SVG。下面的图就是同一份图，为便于阅读而渲染。
 
-| | 打开 | 说明 |
+### 架构图
+
+![akey 架构](docs/diagrams/akey-architecture.zh-CN.png)
+
+组件与两条信任边界：什么住在 `$AKEY_HOME` 里、永远进不了 git；什么以密文形式离开本机。从子进程
+穿过遮蔽器回到调用方的路径被显式画了出来——因为 `run` 交给调用方的**是遮蔽后的**输出，这才是
+这个工具的意义所在。
+
+### 流程图
+
+![akey sync 流程](docs/diagrams/akey-sync-workflow.zh-CN.png)
+
+跨两台机器的 `akey sync`，以泳道与阶段呈现。三条收敛路径（一致或领先、落后、分叉）各自独立，
+而吊销闸门在 `reset --hard` 之前执行。
+
+### 交互图
+
+![akey run 时序](docs/diagrams/akey-run-sequence.zh-CN.png)
+
+`akey run` 的逐条消息，含两处承重的顺序——鉴权早于解密、遮蔽早于任何内容抵达调用方——以及退出码
+的透传。
+
+| | English | 中文 |
 |---|---|---|
-| 架构图 | [`akey-architecture.html`](docs/diagrams/akey-architecture.html) | 组件、两条信任边界，以及明文被允许存在的位置 |
-| 流程图 | [`akey-sync-workflow.html`](docs/diagrams/akey-sync-workflow.html) | 跨两台机器的 `akey sync`，含吊销闸门与三条收敛路径 |
-| 交互图 | [`akey-run-sequence.html`](docs/diagrams/akey-run-sequence.html) | `akey run` 的逐次调用：鉴权 → 解密 → 注入 → 遮蔽 → 退出码 |
+| 架构图 | [HTML](docs/diagrams/akey-architecture.en.html) · [spec](docs/diagrams/akey-architecture.en.json) | [HTML](docs/diagrams/akey-architecture.zh-CN.html) · [规格](docs/diagrams/akey-architecture.zh-CN.json) |
+| 流程图 | [HTML](docs/diagrams/akey-sync-workflow.en.html) · [spec](docs/diagrams/akey-sync-workflow.en.json) | [HTML](docs/diagrams/akey-sync-workflow.zh-CN.html) · [规格](docs/diagrams/akey-sync-workflow.zh-CN.json) |
+| 交互图 | [HTML](docs/diagrams/akey-run-sequence.en.html) · [spec](docs/diagrams/akey-run-sequence.en.json) | [HTML](docs/diagrams/akey-run-sequence.zh-CN.html) · [规格](docs/diagrams/akey-run-sequence.zh-CN.json) |
+
+重新生成的方式见 [docs/diagrams/README.md](docs/diagrams/README.md)。
 
 ## 状态
 
-crate 版本 0.1.0。CLI 完整可用：**186 单元 + 40 契约 + 11 端到端测试**，`cargo clippy` 零警告，
+crate 版本 0.1.0。CLI 完整可用：**195 单元 + 45 契约 + 11 端到端测试**，`cargo clippy` 零警告，
 release 静态二进制约 4 MB，1000 条目金库的最差读取 54 ms（预算 100 ms）。
 
 **Windows** 能编译、单元测试通过，发布流程也会为它产出二进制。端到端测试套件驱动的是 POSIX shell

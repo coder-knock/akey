@@ -68,6 +68,11 @@ akey run --bundle prod-env -- ./deploy.sh
 > your current process environment. Results are sorted by variable name, so identical inputs
 > always produce identical injections — which is what makes this testable.
 
+A picture of this sequence, message by message, is in
+[`docs/diagrams/akey-run-sequence.en.html`](diagrams/akey-run-sequence.en.html) — open it in a
+browser. The two orderings it makes visible are the ones worth internalizing: authorization
+happens before decryption, and masking happens before anything reaches you.
+
 ### Masking is on by default
 
 Any secret the child process writes to stdout/stderr is replaced with `<concealed by akey>` —

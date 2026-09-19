@@ -59,6 +59,10 @@ akey run --bundle prod-env -- ./deploy.sh
 **优先级**（高 → 低）：`--with` > `--bundle` > `--env-file`（多文件时后者覆盖前者）> 你当前进程的环境。
 结果按变量名排序，所以同样的输入永远得到同样的注入，可测。
 
+这一顺序的逐条图示见 [`docs/diagrams/akey-run-sequence.zh-CN.html`](diagrams/akey-run-sequence.zh-CN.html)，
+用浏览器打开即可。它让两处顺序变得可见，而这两处最值得记住：鉴权发生在解密之前，遮蔽发生在任何
+内容抵达你之前。
+
 ### 遮蔽是默认开的
 
 子进程往 stdout/stderr 打的任何密钥都会被换成 `<concealed by akey>`——哪怕它 `printenv`。

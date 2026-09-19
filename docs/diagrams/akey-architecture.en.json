@@ -2,17 +2,17 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "akey 系统架构",
-    "locale": "zh-CN",
-    "output": "akey-architecture.html",
+    "title": "akey Architecture",
+    "locale": "en",
+    "output": "akey-architecture.en.html",
     "quality_profile": "showcase"
   },
   "components": [
     {
       "id": "agent",
       "type": "external",
-      "label": "Agent / 用户",
-      "sublabel": "调用方",
+      "label": "Agent / User",
+      "sublabel": "caller",
       "pos": [
         40,
         280
@@ -26,7 +26,7 @@
       "id": "cli",
       "type": "backend",
       "label": "akey CLI",
-      "sublabel": "单二进制 · 无守护进程",
+      "sublabel": "one binary · no daemon",
       "pos": [
         360,
         280
@@ -40,7 +40,7 @@
       "id": "store",
       "type": "backend",
       "label": "Vault Store",
-      "sublabel": "鉴权 → 解密 → 原子写",
+      "sublabel": "authorize → decrypt",
       "pos": [
         680,
         280
@@ -53,8 +53,8 @@
     {
       "id": "child",
       "type": "external",
-      "label": "子进程",
-      "sublabel": "拿到明文的唯一一方",
+      "label": "Child process",
+      "sublabel": "plaintext stops here",
       "pos": [
         1060,
         280
@@ -68,7 +68,7 @@
       "id": "audit",
       "type": "database",
       "label": "audit.log",
-      "sublabel": "只记条目 ID",
+      "sublabel": "entry IDs only",
       "pos": [
         360,
         80
@@ -82,7 +82,7 @@
       "id": "identity",
       "type": "security",
       "label": "identity.key",
-      "sublabel": "X25519 私钥",
+      "sublabel": "X25519 private key",
       "pos": [
         700,
         80
@@ -97,7 +97,7 @@
       "id": "config",
       "type": "security",
       "label": "config.toml",
-      "sublabel": "trusted 信任集合",
+      "sublabel": "the `trusted` set",
       "pos": [
         890,
         80
@@ -112,7 +112,7 @@
       "id": "recipients",
       "type": "database",
       "label": "recipients.json",
-      "sublabel": "谁存在（目录，非授权）",
+      "sublabel": "who exists, not a grant",
       "pos": [
         690,
         470
@@ -126,7 +126,7 @@
       "id": "vault",
       "type": "database",
       "label": "vault.age",
-      "sublabel": "age 密文条目库",
+      "sublabel": "age ciphertext store",
       "pos": [
         900,
         470
@@ -139,8 +139,8 @@
     {
       "id": "masker",
       "type": "security",
-      "label": "输出遮蔽器",
-      "sublabel": "跨块匹配 · 保留窗口",
+      "label": "Output masker",
+      "sublabel": "masks across reads",
       "pos": [
         1060,
         650
@@ -153,8 +153,8 @@
     {
       "id": "remote",
       "type": "cloud",
-      "label": "git 远端",
-      "sublabel": "不可信 · 只存密文",
+      "label": "git remote",
+      "sublabel": "untrusted · ciphertext",
       "pos": [
         890,
         650
@@ -168,7 +168,7 @@
   "boundaries": [
     {
       "kind": "region",
-      "label": "本机私有目录 $AKEY_HOME（进不了 git）",
+      "label": "Machine-local $AKEY_HOME (never enters git)",
       "wraps": [
         "audit",
         "identity",
@@ -177,7 +177,7 @@
     },
     {
       "kind": "region",
-      "label": "金库仓库 repo/（只有密文离开本机）",
+      "label": "Vault repo repo/ (only ciphertext leaves)",
       "wraps": [
         "recipients",
         "vault"
@@ -196,20 +196,20 @@
       "id": "cli-to-store",
       "from": "cli",
       "to": "store",
-      "label": "解析引用 · 鉴权早于解密"
+      "label": "authorize before decrypt"
     },
     {
       "id": "store-to-child",
       "from": "store",
       "to": "child",
-      "label": "注入明文环境变量",
+      "label": "inject plaintext env vars",
       "variant": "emphasis"
     },
     {
       "id": "cli-to-audit",
       "from": "cli",
       "to": "audit",
-      "label": "无值留痕",
+      "label": "audit without values",
       "fromSide": "top",
       "toSide": "bottom"
     },
@@ -217,7 +217,7 @@
       "id": "identity-to-store",
       "from": "identity",
       "to": "store",
-      "label": "本机私钥解密",
+      "label": "local private key",
       "variant": "security",
       "fromSide": "bottom",
       "toSide": "top",
@@ -227,7 +227,7 @@
       "id": "config-to-store",
       "from": "config",
       "to": "store",
-      "label": "trusted ∩ 收件人",
+      "label": "trusted ∩ recipients",
       "variant": "security",
       "fromSide": "bottom",
       "toSide": "top"
@@ -236,17 +236,17 @@
       "id": "store-to-recipients",
       "from": "store",
       "to": "recipients",
-      "label": "读 / 写目录",
+      "label": "read / write the directory",
       "fromSide": "bottom",
       "toSide": "top",
       "labelDy": 24,
-      "labelDx": -44
+      "labelDx": -64
     },
     {
       "id": "store-to-vault",
       "from": "store",
       "to": "vault",
-      "label": "读 / 写 age 密文",
+      "label": "read / write age ciphertext",
       "fromSide": "bottom",
       "toSide": "top"
     },
@@ -254,7 +254,7 @@
       "id": "vault-to-remote",
       "from": "vault",
       "to": "remote",
-      "label": "pull / push 密文",
+      "label": "pull / push ciphertext",
       "fromSide": "bottom",
       "toSide": "top"
     },
@@ -270,7 +270,7 @@
       "id": "masker-to-agent",
       "from": "masker",
       "to": "agent",
-      "label": "遮蔽后的输出",
+      "label": "masked output",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "bottom"
@@ -279,29 +279,29 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "明文只到子进程",
+      "title": "Plaintext reaches only the child",
       "items": [
-        "run 把明文注入子进程的环境变量，仅它可见",
-        "调用者拿到的是遮蔽后的输出",
-        "遮蔽器跨读取块匹配，保留窗口足够长才下结论"
+        "run injects plaintext into the child's environment only",
+        "the caller receives masked output",
+        "the masker matches across read chunks, holding back until the window is long enough"
       ]
     },
     {
       "dot": "emerald",
-      "title": "访问决策留在本机",
+      "title": "The access decision stays local",
       "items": [
-        "recipients.json 只说「谁存在」，且由不可信远端分发",
-        "加密对象是 recipients ∩ config.trusted",
-        "远端塞进的公钥在获本地批准前拿不到任何密文"
+        "recipients.json says who exists, and arrives via an untrusted remote",
+        "encryption targets recipients ∩ config.trusted",
+        "a key pushed into the directory receives nothing until a human approves it"
       ]
     },
     {
       "dot": "rose",
-      "title": "静态加密与成本",
+      "title": "Encryption at rest, and its cost",
       "items": [
-        "age：X25519 + ChaCha20-Poly1305，热路径上无 KDF",
-        "scrypt 只在 init 与 recovery 时跑",
-        "每台设备一把自己的私钥，进不了 git"
+        "age: X25519 + ChaCha20-Poly1305, no KDF on the hot path",
+        "scrypt runs only at init and recovery",
+        "each device holds its own key, and it cannot enter git"
       ]
     }
   ]

@@ -1,0 +1,255 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "akey sync Across Devices",
+    "locale": "en",
+    "output": "akey-sync-workflow.en.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "local",
+      "label": "Command and local repo"
+    },
+    {
+      "id": "remote",
+      "label": "Exchange with the remote"
+    },
+    {
+      "id": "converge",
+      "label": "Compare and converge"
+    },
+    {
+      "id": "guard",
+      "label": "Guards and failures",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "prep",
+      "label": "Prepare",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "exchange",
+      "label": "Exchange with the remote",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "converge",
+      "label": "Converge",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "start",
+    "commit_local",
+    "fetch",
+    "compare",
+    "keep_revocations",
+    "fast_forward",
+    "can_decrypt",
+    "report"
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "lane": "local",
+      "col": 0,
+      "width": 180,
+      "type": "backend",
+      "label": "akey sync",
+      "sublabel": "a git repo with a remote"
+    },
+    {
+      "id": "commit_local",
+      "lane": "local",
+      "col": 1,
+      "width": 180,
+      "type": "backend",
+      "label": "Commit local changes",
+      "sublabel": "add SYNCED_FILES"
+    },
+    {
+      "id": "fetch",
+      "lane": "remote",
+      "col": 2,
+      "width": 180,
+      "type": "cloud",
+      "label": "fetch origin",
+      "sublabel": "produce FETCH_HEAD"
+    },
+    {
+      "id": "compare",
+      "lane": "converge",
+      "col": 3,
+      "width": 185,
+      "type": "backend",
+      "label": "Compare HEAD with FETCH_HEAD",
+      "sublabel": "equal · ahead · behind · diverged"
+    },
+    {
+      "id": "three_way",
+      "lane": "converge",
+      "col": 4,
+      "width": 180,
+      "type": "backend",
+      "label": "Three-way merge",
+      "sublabel": "merge_base + conflict copies"
+    },
+    {
+      "id": "refused",
+      "lane": "guard",
+      "col": 2,
+      "width": 180,
+      "type": "security",
+      "label": "Refused / failed",
+      "sublabel": "mode forbids it · push rejected ×3"
+    },
+    {
+      "id": "keep_revocations",
+      "lane": "guard",
+      "col": 3,
+      "width": 180,
+      "type": "security",
+      "label": "Keep revocation markers",
+      "sublabel": "before reset --hard"
+    },
+    {
+      "id": "fast_forward",
+      "lane": "guard",
+      "col": 4,
+      "width": 180,
+      "type": "security",
+      "label": "Fast-forward",
+      "sublabel": "reset --hard"
+    },
+    {
+      "id": "can_decrypt",
+      "lane": "guard",
+      "col": 5,
+      "width": 180,
+      "type": "security",
+      "label": "Confirm it still decrypts",
+      "sublabel": "else locked"
+    },
+    {
+      "id": "report",
+      "lane": "local",
+      "col": 5,
+      "width": 190,
+      "type": "external",
+      "label": "Report the outcome",
+      "sublabel": "up_to_date · pushed · pulled · merged"
+    }
+  ],
+  "edges": [
+    {
+      "id": "start-commit",
+      "from": "start",
+      "to": "commit_local",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "commit-fetch",
+      "from": "commit_local",
+      "to": "fetch",
+      "role": "main"
+    },
+    {
+      "id": "fetch-compare",
+      "from": "fetch",
+      "to": "compare",
+      "role": "main"
+    },
+    {
+      "id": "compare-keep",
+      "from": "compare",
+      "to": "keep_revocations",
+      "label": "remote is ahead",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "keep-ff",
+      "from": "keep_revocations",
+      "to": "fast_forward",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "ff-decrypt",
+      "from": "fast_forward",
+      "to": "can_decrypt",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "decrypt-report",
+      "from": "can_decrypt",
+      "to": "report",
+      "label": "pulled",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "compare-merge",
+      "from": "compare",
+      "to": "three_way",
+      "label": "diverged",
+      "variant": "emphasis",
+      "role": "branch"
+    },
+    {
+      "id": "merge-report",
+      "from": "three_way",
+      "to": "report",
+      "label": "merged",
+      "role": "branch"
+    },
+    {
+      "id": "compare-refused",
+      "from": "compare",
+      "to": "refused",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Revocation outranks a pull",
+      "items": [
+        "reset --hard replaces the working tree wholesale, recipients.json included",
+        "so the local revocations are merged back and committed before the remote revision lands",
+        "otherwise a device removed with devices rm needs only git write access to push itself back in"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Verify immediately after pulling",
+      "items": [
+        "a revoked device that fast-forwards lands in a silent vault-is-there-but-will-not-open state",
+        "sync loads the vault once and reports locked, naming how many commits behind it is",
+        "rather than waiting for the user's next command to find out"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Three convergence paths",
+      "items": [
+        "equal / ahead → push directly",
+        "behind → keep revocations, then reset --hard",
+        "diverged → merge_base must exist, or the merge is refused"
+      ]
+    }
+  ]
+}

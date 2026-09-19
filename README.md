@@ -165,19 +165,44 @@ agent-facing and landing documents are bilingual.
 
 ## Diagrams
 
-Three explorable diagrams. Each is a single standalone HTML file with inline SVG — open it in a
-browser for pan, zoom, search, relationship tracing, dark/light, and PNG or SVG export. Each one
-is generated from a checked-in JSON spec, so it is regenerated rather than hand-edited.
+Three diagrams, each in English and Chinese. Every one is generated from a checked-in JSON spec,
+so it is regenerated rather than hand-edited, and each ships as a standalone HTML file with inline
+SVG — open it in a browser for pan, zoom, search, relationship tracing, dark/light, and PNG or SVG
+export. The images below are the same figures, rendered for reading.
 
-| | Open | Shows |
+### Architecture
+
+![akey architecture](docs/diagrams/akey-architecture.en.png)
+
+Components and the two trust boundaries: what lives in `$AKEY_HOME` and never enters git, versus
+what leaves the machine as ciphertext. The return path from the child process through the masker is
+drawn explicitly, because `run` handing the caller *masked* output is the whole point.
+
+### Sync workflow
+
+![akey sync workflow](docs/diagrams/akey-sync-workflow.en.png)
+
+`akey sync` across two machines, as lanes and phases. The three convergence paths (equal or ahead,
+behind, diverged) are separate, and the revocation guard runs before `reset --hard`.
+
+### Run sequence
+
+![akey run sequence](docs/diagrams/akey-run-sequence.en.png)
+
+`akey run` message by message, including the two orderings that are load-bearing — authorization
+before decryption, and masking before anything reaches the caller — plus exit-code passthrough.
+
+| | English | 中文 |
 |---|---|---|
-| Architecture | [`akey-architecture.html`](docs/diagrams/akey-architecture.html) | Components, the two trust boundaries, and where plaintext is allowed to exist |
-| Sync workflow | [`akey-sync-workflow.html`](docs/diagrams/akey-sync-workflow.html) | `akey sync` across two machines, including the revocation guard and the three convergence paths |
-| Run sequence | [`akey-run-sequence.html`](docs/diagrams/akey-run-sequence.html) | `akey run` call by call: authorize → decrypt → inject → mask → exit code |
+| Architecture | [HTML](docs/diagrams/akey-architecture.en.html) · [spec](docs/diagrams/akey-architecture.en.json) | [HTML](docs/diagrams/akey-architecture.zh-CN.html) · [规格](docs/diagrams/akey-architecture.zh-CN.json) |
+| Sync workflow | [HTML](docs/diagrams/akey-sync-workflow.en.html) · [spec](docs/diagrams/akey-sync-workflow.en.json) | [HTML](docs/diagrams/akey-sync-workflow.zh-CN.html) · [规格](docs/diagrams/akey-sync-workflow.zh-CN.json) |
+| Run sequence | [HTML](docs/diagrams/akey-run-sequence.en.html) · [spec](docs/diagrams/akey-run-sequence.en.json) | [HTML](docs/diagrams/akey-run-sequence.zh-CN.html) · [规格](docs/diagrams/akey-run-sequence.zh-CN.json) |
+
+See [docs/diagrams/README.md](docs/diagrams/README.md) for the regeneration commands.
 
 ## Status
 
-Crate version 0.1.0. The CLI is complete and usable: **186 unit + 40 contract + 11 end-to-end
+Crate version 0.1.0. The CLI is complete and usable: **195 unit + 45 contract + 11 end-to-end
 tests**, `cargo clippy` clean, ~4 MB static release binary, worst-case vault read 54 ms on a
 1000-entry vault against a 100 ms budget.
 
