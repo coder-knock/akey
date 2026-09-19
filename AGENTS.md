@@ -8,6 +8,9 @@ recipes, exit-code recovery, the reference grammar, MCP wiring. `SKILL.md` is th
 material as a loadable skill definition. This file is for agents *changing* akey.
 Read `REQUIREMENTS.md` (contract), `DESIGN.md` (architecture, on-disk formats, algorithms)
 and `TESTPLAN.md` (what each module must prove) before touching anything.
+**`docs/SECURITY.md` is load-bearing** — it records which attack paths were found and fixed, and one
+that is still open (recipient trust). Several of those fixes exist *only* as policy checks in
+`Ctx`; removing one silently re-opens a vulnerability that has a regression test waiting for you.
 
 ## Build and test
 

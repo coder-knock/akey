@@ -427,3 +427,21 @@ akey sync --json
 | `AKEY_NEW_RECOVERY_PASSPHRASE` | The new passphrase for `recovery rotate` |
 
 For authoritative, complete information: `akey schema --json`.
+
+## 12. Limits you should not design around
+
+- **Masking is a guardrail, not a sandbox.** `akey run` hides secrets the child *accidentally*
+  prints. A child that means to exfiltrate already has the value in its environment; it can base64
+  it, split it across stdout and stderr, or write it to a socket. Do not treat `akey run` as a
+  confidentiality boundary against hostile code.
+- **The remote decides who can read.** `recipients.json` is distributed by the git remote. If you
+  control the machine but someone else can write to that remote, they can add a key and the next
+  legitimate write re-encrypts the vault to them. Until this is hardened, treat the vault remote as
+  a high-value credential. Details: `docs/SECURITY.md` §5.
+- **A token is a policy check, not a separate identity.** Anyone who can run `akey` on a device can
+  read `identity.key`. Use tokens to limit what *an agent's normal commands* touch — not as a
+  cryptographic boundary.
+- **TOTP codes are meant to be shown.** `akey://…?attribute=otp` returns the 6-digit code, not the
+  seed. The seed itself is concealed like any other secret.
+
+The full threat model, the attack simulations and every finding are in `docs/SECURITY.md`.

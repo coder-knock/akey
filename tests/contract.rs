@@ -245,6 +245,51 @@ fn export_under_a_token_only_covers_the_scope() {
     assert!(!stdout.contains(CANARY), "export leaked an out-of-scope entry");
 }
 
+/// 能力令牌是只读凭据——**包括不能改密码学边界本身**。
+///
+/// 曾经漏了 admin 侧：一个被限制在单条目上的令牌可以 `token create` 铸出**无限制**令牌
+/// 再读全库；还能 `recovery set` 给自己留一把运营者看不见的恢复密码。两条都实测过。
+#[test]
+fn a_scoped_token_cannot_mutate_admin_state() {
+    let device = with_entry();
+    let created = device.json_ok(&["token", "create", "--name", "narrow", "--allow", "openai"]);
+    let token = created["token"].as_str().unwrap();
+
+    for args in [
+        vec!["token", "create", "--name", "escalated"],
+        vec!["devices", "add", "--name", "backdoor"],
+        vec!["devices", "rename", "testbox", "renamed"],
+        vec!["recovery", "set"],
+        vec!["token", "rm", "narrow"],
+    ] {
+        let out = device
+            .command()
+            .env("AKEY_TOKEN", token)
+            .env("AKEY_RECOVERY_PASSPHRASE", "attacker-chosen-passphrase")
+            .args(["--json"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(7),
+            "`akey {}` must be denied under a token",
+            args.join(" ")
+        );
+    }
+
+    // 库没被改过：没有新令牌，也没有被植入恢复密码。
+    let tokens = device.json_ok(&["token", "list"]);
+    let names: Vec<&str> = tokens["tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["narrow"]);
+    assert!(!device.repo().join("recovery.age").exists(), "no backdoor passphrase");
+}
+
 fn entry_names(device: &Device) -> Vec<String> {
     let data = device.json_ok(&["list"]);
     let mut names: Vec<String> = data["entries"]
@@ -258,6 +303,106 @@ fn entry_names(device: &Device) -> Vec<String> {
 }
 
 // --------------------------------------------------------------- 明文暴露控制
+
+/// `inject` 把渲染结果直接交给调用者，所以它是**明文通道**，不是 `run` 的同桌。
+///
+/// 这三条覆盖同一个根因：设计文档曾把 inject 与 run 归为一类，于是条目策略、
+/// `AKEY_NO_REVEAL`、令牌 `--deny-reveal` 三道闸门全都没装到 inject 上——
+/// 一句 `printf 'x=akey://openai/credential' | akey inject` 就能把明文取走。
+#[test]
+fn inject_cannot_route_around_a_global_reveal_ban() {
+    let device = with_entry();
+    let template = "token=akey://openai/credential\n";
+
+    let out = device.run_with_stdin_env(&["inject"], template, &[("AKEY_NO_REVEAL", "1")]);
+    assert_eq!(out.status.code(), Some(7), "AKEY_NO_REVEAL must cover inject");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains(CANARY),
+        "plaintext escaped through inject"
+    );
+}
+
+#[test]
+fn inject_cannot_route_around_a_deny_reveal_token() {
+    let device = with_entry();
+    let created = device.json_ok(&["token", "create", "--name", "reader", "--deny-reveal"]);
+    let token = created["token"].as_str().unwrap();
+
+    let out = device.run_with_stdin_env(
+        &["inject"],
+        "token=akey://openai/credential\n",
+        &[("AKEY_TOKEN", token)],
+    );
+    assert_eq!(out.status.code(), Some(7), "a deny-reveal token must cover inject");
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
+}
+
+#[test]
+fn inject_respects_a_per_entry_reveal_deny() {
+    let device = with_entry();
+    device.json_ok(&["edit", "openai", "--reveal-policy", "deny"]);
+
+    let out = device.run_with_stdin(&["inject"], "token=akey://openai/credential\n");
+    assert_eq!(out.status.code(), Some(7));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
+}
+
+/// 掩蔽是"run 不把明文交给调用者"的实现方式，所以关掉它的开关必须受同一套策略约束。
+#[test]
+fn run_refuses_no_masking_while_reveal_is_forbidden() {
+    let device = with_entry();
+    let out = device
+        .command()
+        .env("AKEY_NO_REVEAL", "1")
+        .args([
+            "run",
+            "--no-masking",
+            "--with",
+            "X=akey://openai/credential",
+            "--",
+            "sh",
+            "-c",
+            "echo $X",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(7));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(CANARY));
+
+    // 掩蔽开着时，同样的 run 仍然可用（只是看不到明文）。
+    let out = device.run(&[
+        "run",
+        "--with",
+        "X=akey://openai/credential",
+        "--",
+        "sh",
+        "-c",
+        "echo $X",
+    ]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("concealed by akey"));
+}
+
+/// `export` 是整库明文出库，不能把明确标了"永不取明文"的条目一起带走。
+#[test]
+fn export_refuses_entries_marked_reveal_deny() {
+    let device = with_entry();
+    device.set_secret("quiet", "credential", "sk-quiet-canary");
+    device.json_ok(&["edit", "quiet", "--reveal-policy", "deny"]);
+
+    let (code, kind, stdout) = device.expect_failure(&["export", "--as", "json", "--yes"]);
+    assert_eq!(code, 7, "export must not carry reveal=deny entries out in the clear");
+    assert_eq!(kind, "denied");
+    assert!(stdout.is_empty());
+
+    // 提示里点名了是哪个条目——否则用户无从下手。
+    let stderr = device.stderr(&["export", "--as", "json", "--yes"]);
+    assert!(stderr.contains("quiet"), "the error must name the offending entry");
+
+    // 明确改回 allow 之后才放行，并且是**显式**的一步。
+    device.json_ok(&["edit", "quiet", "--reveal-policy", "allow"]);
+    device.json_ok(&["export", "--as", "json", "--yes"]);
+}
 
 #[test]
 fn get_conceals_secrets_and_exposes_references_instead() {
@@ -665,6 +810,25 @@ fn recovery_rotate_refuses_to_be_a_no_op() {
         String::from_utf8_lossy(&out.stderr).contains("identical"),
         "a rotate that does not rotate must be rejected loudly"
     );
+}
+
+#[test]
+fn a_weak_recovery_passphrase_is_refused_from_any_source() {
+    let device = Device::initialized("testbox");
+
+    // 环境变量这条路曾经绕过长度校验，能设出单字符密码。
+    let out = device.run_with_env(&["recovery", "set"], &[("AKEY_RECOVERY_PASSPHRASE", "a")]);
+    assert_eq!(out.status.code(), Some(2), "1-character passphrase must be refused");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("at least"));
+
+    let out = device.run_with_env(
+        &["recovery", "rotate"],
+        &[
+            ("AKEY_RECOVERY_PASSPHRASE", "a-long-enough-passphrase"),
+            ("AKEY_NEW_RECOVERY_PASSPHRASE", "b"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "rotate must refuse a weak replacement too");
 }
 
 #[test]

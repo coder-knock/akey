@@ -63,6 +63,23 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
     let subject = entry.map_or(reference.item.clone(), |e| e.name.clone());
 
     match &args.out_file {
+        // `--dry-run` 承诺"只预览不落盘"，而把明文写成文件正是它该拦下的事。
+        // 曾经这里直接写盘，于是 `akey --dry-run read … -o f` 照样产出明文文件。
+        Some(path) if ctx.dry_run => {
+            ctx.out.emit(
+                format!(
+                    "dry run: would write {} byte(s) of plaintext to {}",
+                    payload.len(),
+                    path.display()
+                ),
+                &json!({
+                    "action": "read",
+                    "reference": reference.to_string(),
+                    "out_file": path.display().to_string(),
+                    "bytes": payload.len(),
+                }),
+            )?;
+        }
         Some(path) => {
             paths::atomic_write(path, payload.as_bytes(), FILE_MODE)?;
             ctx.out.emit(
@@ -107,6 +124,15 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
 pub fn run(ctx: &Ctx, args: &RunArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
+
+    // 掩蔽正是"run 不把明文交给调用者"这条承诺的实现方式；关掉它等于放弃承诺。
+    if args.no_masking && ctx.plaintext_forbidden(&vault)? {
+        return Err(Error::denied(
+            "--no-masking would let the child's output reach you in the clear; it is refused \
+             while AKEY_NO_REVEAL is set or this token carries --deny-reveal. Keep masking on, \
+             or ask an operator to change the policy",
+        ));
+    }
 
     // 授权先于解密：受限令牌不得把作用域外的条目注入子进程。
     let touch = inject::touch(&vault, &args.with, &args.bundle, &args.env_file)?;
@@ -154,11 +180,28 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
         None => read_stdin()?,
     };
 
-    // 渲染结果会落成明文文件：模板里引用的每个条目都要过作用域。
-    ctx.authorize_references(&vault, std::slice::from_ref(&input))?;
+    // 渲染结果会**直接交给调用者**（stdout，或 `-o` 指向一个调用者随后能读的文件），
+    // 所以 inject 与 `read` 同类，是明文通道。条目策略 / AKEY_NO_REVEAL / 令牌
+    // --deny-reveal / 令牌作用域——四道闸门全都要过。
+    ctx.gate_references_reveal(&vault, std::slice::from_ref(&input))?;
 
     let rendered = inject::render_template(&vault, &input)?;
     match &args.out_file {
+        // 同 `read`：`--dry-run` 不得把明文写到磁盘。
+        Some(path) if ctx.dry_run => {
+            ctx.out.emit(
+                format!(
+                    "dry run: would write {} byte(s) of plaintext to {}",
+                    rendered.len(),
+                    path.display()
+                ),
+                &json!({
+                    "action": "inject",
+                    "out_file": path.display().to_string(),
+                    "bytes": rendered.len(),
+                }),
+            )?;
+        }
         Some(path) => {
             paths::atomic_write(path, rendered.as_bytes(), FILE_MODE)?;
             ctx.out.emit(
@@ -206,6 +249,24 @@ pub fn export(ctx: &Ctx, args: &ExportArgs) -> Result<()> {
 
     // 导出等于把明文整批交出去：`AKEY_NO_REVEAL` 与 `deny_reveal` 令牌同样不得放行。
     ctx.gate_reveal(&vault, None)?;
+
+    // 条目**自身**的 reveal=deny 也必须生效。`gate_reveal(vault, None)` 只看全局策略，
+    // 少了这段，一条被明确标记"永不取明文"的条目会被 export 原样写出去。
+    let denied: Vec<&str> = vault
+        .live_entries()
+        .filter(|entry| entry.reveal == crate::vault::model::Reveal::Deny)
+        .map(|entry| entry.name.as_str())
+        .collect();
+    if !denied.is_empty() {
+        return Err(Error::denied(format!(
+            "{} entr{} marked reveal=deny would be written out in the clear: {}. \
+             Flip the policy explicitly with `akey edit <name> --reveal-policy allow` \
+             if dumping it is really intended",
+            denied.len(),
+            if denied.len() == 1 { "y is" } else { "ies are" },
+            denied.join(", ")
+        )));
+    }
 
     let scope = ctx.scoped_names(&vault)?;
     let rendered = render_export(&vault, args.encoding, scope.as_deref())?;
@@ -1296,7 +1357,6 @@ mod tests {
             repo: repo.clone(),
             remote: None,
             device_name: "test-device".to_string(),
-            reveal_allowed: true,
             created_at: Utc::now(),
         };
         config.save(&paths).expect("写配置");

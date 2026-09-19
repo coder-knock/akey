@@ -22,12 +22,29 @@ use crate::vault::store::Store;
 pub struct Injection {
     /// 变量名 → 明文。顺序稳定，便于测试与 `--dry-run` 预览。
     pub vars: Vec<(String, Zeroizing<String>)>,
+    /// 被代入到这些值里的**单个**明文。
+    ///
+    /// 掩蔽器必须同时登记它们。只登记最终值的话，`--with AUTH="Bearer akey://a/b"`
+    /// 会让子进程打印 `Bearer ` 之后的那半段（`${AUTH#Bearer }`）时漏出明文——
+    /// 实测过，确实漏。
+    pub plaintexts: Vec<Zeroizing<String>>,
 }
 
 impl Injection {
-    /// 供遮蔽管线使用的明文清单。
+    /// 只用变量表构造（测试与内部使用）。`plaintexts` 只影响掩蔽面，不影响注入内容。
+    pub fn from_vars(vars: Vec<(String, Zeroizing<String>)>) -> Self {
+        Injection {
+            vars,
+            plaintexts: Vec::new(),
+        }
+    }
+
+    /// 供遮蔽管线使用的明文清单：最终值 + 被代入的单值。
     pub fn secrets(&self) -> Vec<String> {
-        self.vars.iter().map(|(_, v)| v.to_string()).collect()
+        let mut all: BTreeSet<String> =
+            self.vars.iter().map(|(_, v)| v.to_string()).collect();
+        all.extend(self.plaintexts.iter().map(|p| p.to_string()));
+        all.into_iter().collect()
     }
 }
 
@@ -56,10 +73,12 @@ pub fn resolve(
 ) -> Result<Injection> {
     // 低 → 高依次插入：`BTreeMap` 的"后写胜出"就是优先级，末尾的键序就是确定性输出。
     let mut vars: BTreeMap<String, Zeroizing<String>> = BTreeMap::new();
+    // 被代入到值里的单个明文，供掩蔽器登记（见 `Injection::plaintexts`）。
+    let mut plaintexts: Vec<Zeroizing<String>> = Vec::new();
 
     for path in env_files {
         for (name, value) in load_env_file(path)? {
-            vars.insert(name, render_refs(vault, &value)?);
+            vars.insert(name, render_refs(vault, &value, &mut plaintexts)?);
         }
     }
 
@@ -85,7 +104,7 @@ pub fn resolve(
                         "--with '{spec}': '{name}' is not a valid environment variable name"
                     )));
                 }
-                (name.to_string(), with_value(vault, raw)?)
+                (name.to_string(), with_value(vault, raw, &mut plaintexts)?)
             }
             None => {
                 let entry = vault.find(spec)?;
@@ -97,6 +116,7 @@ pub fn resolve(
 
     Ok(Injection {
         vars: vars.into_iter().collect(),
+        plaintexts,
     })
 }
 
@@ -199,7 +219,10 @@ pub fn execute(command: &[String], injection: &Injection, mask: bool) -> Result<
 ///
 /// 未命中的引用 → `NotFound` 且点名该引用（不回显字段值：错误信息里没有秘密）。
 pub fn render_template(vault: &Vault, input: &str) -> Result<String> {
-    Ok(render_refs(vault, input)?.to_string())
+    // 这里的 sink 是丢弃的：`inject` 的掩蔽不适用（调用者本来就要拿到明文，
+    // 且闸门在 `Ctx::gate_references_reveal` 已经把关）。
+    let mut unused: Vec<Zeroizing<String>> = Vec::new();
+    Ok(render_refs(vault, input, &mut unused)?.to_string())
 }
 
 /// 环境变量名派生：大写，非字母数字 → `_`。
@@ -252,10 +275,14 @@ pub fn parse_dotenv(label: &str, input: &str) -> Result<Vec<(String, String)>> {
 }
 
 /// `--with` 的右半：含 `akey://` 就替换引用，否则按条目名取默认秘密字段。
-fn with_value(vault: &Vault, raw: &str) -> Result<Zeroizing<String>> {
+fn with_value(
+    vault: &Vault,
+    raw: &str,
+    sink: &mut Vec<Zeroizing<String>>,
+) -> Result<Zeroizing<String>> {
     let raw = raw.trim();
     if raw.contains(reference::SCHEME) {
-        return render_refs(vault, raw);
+        return render_refs(vault, raw, sink);
     }
     default_secret(vault.find(raw)?)
 }
@@ -291,9 +318,20 @@ fn require_env_bundle<'a>(vault: &'a Vault, item: &str) -> Result<&'a Entry> {
 }
 
 /// 把文本里的每个引用替换成明文。引用原文按出现顺序处理，重复引用各自替换。
-fn render_refs(vault: &Vault, input: &str) -> Result<Zeroizing<String>> {
+fn render_refs(
+    vault: &Vault,
+    input: &str,
+    sink: &mut Vec<Zeroizing<String>>,
+) -> Result<Zeroizing<String>> {
     let now = Utc::now();
-    let rendered = walk_refs(input, |raw| resolve_ref(vault, raw, now))?;
+    let rendered = walk_refs(input, |raw| {
+        let value = resolve_ref(vault, raw, now)?;
+        // 记下**单个**明文，而不只是拼好的整串。
+        if !value.is_empty() {
+            sink.push(Zeroizing::new(value.clone()));
+        }
+        Ok(value)
+    })?;
     Ok(Zeroizing::new(rendered))
 }
 
@@ -578,7 +616,6 @@ mod tests {
                 repo: dir.join("repo"),
                 remote: None,
                 device_name: "test-device".to_string(),
-                reveal_allowed: true,
                 created_at: Utc::now(),
             },
             identity: DeviceIdentity::generate("test-device"),
@@ -893,12 +930,10 @@ mod tests {
         assert_ne!(inherited, "injected-home-value");
 
         let target = dir.path().join("out.txt");
-        let injection = Injection {
-            vars: vec![(
-                "HOME".to_string(),
-                Zeroizing::new("injected-home-value".to_string()),
-            )],
-        };
+        let injection = Injection::from_vars(vec![(
+            "HOME".to_string(),
+            Zeroizing::new("injected-home-value".to_string()),
+        )]);
         let script = format!("/bin/echo -n \"$HOME\" > '{}'", target.display());
         let code = execute(&sh(&script), &injection, false).expect("子进程应能启动");
         assert_eq!(code, 0);
@@ -1056,9 +1091,7 @@ mod tests {
     const SECRET: &str = "sk-live-MASK-ME-PLEASE-123456789";
 
     fn secret_injection() -> Injection {
-        Injection {
-            vars: vec![("SECRET".to_string(), Zeroizing::new(SECRET.to_string()))],
-        }
+        Injection::from_vars(vec![("SECRET".to_string(), Zeroizing::new(SECRET.to_string()))])
     }
 
     #[test]
@@ -1125,16 +1158,15 @@ mod tests {
                       sleep 0.05; /bin/echo -n \"$PIECE2\"; sleep 0.05; \
                       /bin/echo -n \"$PIECE3\"; sleep 0.05; /bin/echo -n \"$PIECE4\"";
 
-        let (code, out, _) = pipe_to(script, &Injection { vars }, true);
+        let (code, out, _) = pipe_to(script, &Injection::from_vars(vars), true);
         assert_eq!(code, 0);
         assert_eq!(out.text(), TAINTED, "跨写块的密钥必须被整体遮蔽");
     }
 
     #[test]
     fn short_values_are_left_alone() {
-        let injection = Injection {
-            vars: vec![("FLAG".to_string(), Zeroizing::new("true".to_string()))],
-        };
+        let injection =
+            Injection::from_vars(vec![("FLAG".to_string(), Zeroizing::new("true".to_string()))]);
         let (code, out, _) = pipe_to("printf 'flag=%s' \"$FLAG\"", &injection, true);
         assert_eq!(code, 0);
         assert_eq!(out.text(), "flag=true", "短值不该被马赛克掉");

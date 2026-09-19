@@ -407,3 +407,12 @@ akey sync --json
 | `AKEY_NEW_RECOVERY_PASSPHRASE` | `recovery rotate` 的新密码 |
 
 需要更权威、更完整的信息：`akey schema --json`。
+
+## 12. 你不该拿它当边界的几件事
+
+- **掩蔽是护栏，不是沙箱。** `akey run` 挡的是子进程**误回显**。一个存心外泄的子进程本来就握着值：它base64 一下、拆到 stdout/stderr 两边、或写个 socket 都行。不要把 `akey run` 当成对抗恶意代码的机密性边界。
+- **远端决定谁能读。** `recipients.json` 由 git 远端分发。你控制本机、但别人能写那个远端时，他可以加一把公钥，下一次合法写入就会把整库重新加密给他。在这一点被加固之前，**请把金库远端当成高价值凭据**。细节见 `docs/SECURITY.zh-CN.md` §5。
+- **令牌是策略检查，不是独立身份。** 能在这台机器上跑 `akey` 的人就能读 `identity.key`。令牌的作用是限制**某个 agent 的日常命令**能碰什么，不是密码学边界。
+- **TOTP 动态码本来就该显示。** `akey://…?attribute=otp` 返回的是 6 位码，不是种子；种子与其它秘密一样默认隐藏。
+
+完整威胁模型、攻防模拟与全部发现见 `docs/SECURITY.zh-CN.md`。

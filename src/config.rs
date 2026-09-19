@@ -17,14 +17,7 @@ pub struct Config {
     pub remote: Option<String>,
     /// 本机设备名，出现在 `recipients.json` 与审计日志中。
     pub device_name: String,
-    /// 本机是否允许 `--reveal`。为 false 时即便条目允许也拒绝（退出码 7）。
-    #[serde(default = "default_true")]
-    pub reveal_allowed: bool,
     pub created_at: DateTime<Utc>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Config {
@@ -102,7 +95,6 @@ mod tests {
             repo: PathBuf::from("/tmp/vault-repo"),
             remote: Some("git@github.com:me/akey-vault.git".into()),
             device_name: "macbook".into(),
-            reveal_allowed: true,
             created_at: Utc::now(),
         }
     }
@@ -142,7 +134,6 @@ mod tests {
 
         let config = Config::load(&paths).unwrap();
         assert!(config.remote.is_none());
-        assert!(config.reveal_allowed);
     }
 
     #[test]

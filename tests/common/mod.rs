@@ -63,8 +63,16 @@ impl Device {
 
     /// 带 stdin 运行。
     pub fn run_with_stdin(&self, args: &[&str], stdin: &str) -> Output {
-        let mut child = self
-            .command()
+        self.run_with_stdin_env(args, stdin, &[])
+    }
+
+    /// 带 stdin 与环境变量运行。
+    pub fn run_with_stdin_env(&self, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Output {
+        let mut cmd = self.command();
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
+        let mut child = cmd
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

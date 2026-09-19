@@ -11,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::vault::merge::{Conflict, MergeStats, merge3};
 use crate::vault::model::Vault;
 use crate::vault::recipients::Recipients;
-use crate::vault::store::{RECIPIENTS_FILE, Store, VAULT_FILE};
+use crate::vault::store::{RECIPIENTS_FILE, SYNCED_FILES, Store, VAULT_FILE};
 
 pub mod git;
 
@@ -88,7 +88,7 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
     }
 
     // 先把工作区落定，这样 `ours` 就是 HEAD 的内容。
-    git.add_all()?;
+    git.add_paths(SYNCED_FILES)?;
     git.commit(&format!("akey: local changes from {device}"))?;
 
     if mode == SyncMode::Status {
@@ -139,7 +139,25 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
                 ));
             }
             let behind = git.commit_count(&format!("{local_rev}..{remote_rev}"))?;
+
+            // 远端版本整体落地之前先保住本地的吊销标记。
+            //
+            // `reset --hard` 会把工作区（含 recipients.json）换成远端版本。而
+            // `merge_recipients` 的"吊销优先"只在**分叉**路径上跑得到——一个被
+            // `devices rm` 掉的设备只要还有 git 写权限，推一个把自己加回去的普通提交，
+            // 快进路径就会把那本带吊销的清单整个覆盖掉，吊销当场失效。实测可复现。
+            let ours = store.load_recipients()?;
+            let theirs = recipients_at(&git, &remote_rev)?;
+            let merged = merge_recipients(&Recipients::default(), &ours, &theirs);
+
             git.reset_hard(&remote_rev)?;
+
+            if merged != theirs {
+                merged.save(&store.recipients_path())?;
+                git.add_paths(SYNCED_FILES)?;
+                git.commit("akey: keep local recipient revocations")?;
+            }
+
             // 快进后必须确认本机仍能解密：否则会静默进入"库在、但打不开"的状态，
             // 而用户直到下一条命令才知道自己被吊销了。
             store.load().map_err(|e| {
@@ -231,7 +249,7 @@ fn merge(store: &Store, git: &Git, base_rev: &str, remote_rev: &str) -> Result<M
     merged_recipients.save(&store.recipients_path())?;
     store.save_with(&result.vault, &merged_recipients)?;
 
-    git.add_all()?;
+    git.add_paths(SYNCED_FILES)?;
     let message = format!(
         "akey: merge {} entries, {} conflicts",
         result.vault.entries.len(),

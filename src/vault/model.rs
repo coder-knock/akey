@@ -377,8 +377,17 @@ pub enum FieldType {
 }
 
 impl FieldType {
+    /// 交付给调用者前是否必须显式 `--reveal`。
+    ///
+    /// `Otp` 也算：那个字段存的是 TOTP **种子**（`otpauth://…?secret=…`），
+    /// 拿到种子就能永久推导出全部动态码——它比一次性的那个码敏感得多。
+    /// 曾经漏了它，于是默认 `get` 就把种子印出来，连 `AKEY_NO_REVEAL`
+    /// 与条目的 `reveal=deny` 都拦不住（因为字段压根没被当成秘密）。
     pub fn is_concealed(self) -> bool {
-        matches!(self, FieldType::Concealed | FieldType::Notes | FieldType::SshKey)
+        matches!(
+            self,
+            FieldType::Concealed | FieldType::Notes | FieldType::SshKey | FieldType::Otp
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -483,9 +492,11 @@ mod tests {
         assert!(FieldType::Concealed.is_concealed());
         assert!(FieldType::Notes.is_concealed());
         assert!(FieldType::SshKey.is_concealed());
+        // `otp` 字段存的是 TOTP **种子**，不是那个一次性码——拿到种子就能永久推导出
+        // 全部动态码，所以它必须默认隐藏。
+        assert!(FieldType::Otp.is_concealed());
         assert!(!FieldType::String.is_concealed());
         assert!(!FieldType::Url.is_concealed());
-        assert!(!FieldType::Otp.is_concealed());
     }
 
     #[test]

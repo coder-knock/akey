@@ -207,6 +207,86 @@ fn devices_rm_refuses_to_lock_out_the_current_machine() {
     assert_eq!(kind, "usage");
 }
 
+/// 吊销必须扛得住**快进路径**，而不只是扛得住分叉合并。
+///
+/// `merge_recipients` 的"吊销优先"只在分叉时跑得到。曾经快进分支用 `reset --hard`
+/// 把工作区（含 `recipients.json`）整体换成远端版本，于是：一个被 `devices rm` 掉、
+/// 但仍有 git 写权限的设备，只要推一个把自己加回去的**普通提交**，下一台设备的
+/// 快进同步就会把本地那份带吊销标记的清单覆盖掉——吊销当场被逆转，它随即又能读到
+/// 后续写入的全部明文。实测可复现。
+#[test]
+fn revocation_survives_a_fast_forward() {
+    let pair = pair();
+    pair.alpha.set_secret("openai", "credential", "sk-before-revoke");
+    pair.alpha.run_ok_with_env(&["sync"], &[]);
+    pair.beta.run_ok_with_env(&["sync"], &[]);
+    assert!(pair.beta.stdout(&["read", "akey://openai/credential"]).contains("sk-before-revoke"));
+
+    pair.alpha.run_ok_with_env(&["devices", "rm", "beta"], &[]);
+
+    // beta 落后于远端：先快进，再把自己从 revoked 改回活跃，然后普通推送。
+    let repo = pair.beta.repo();
+    for args in [
+        vec!["fetch", "--quiet", "origin"],
+        vec!["reset", "--hard", "origin/main"],
+    ] {
+        assert!(git(&repo, &args).status.success(), "test setup: git {args:?}");
+    }
+    let path = repo.join("recipients.json");
+    let mut file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for (_, record) in file["recipients"].as_object_mut().unwrap() {
+        if record["name"] == "beta" {
+            record.as_object_mut().unwrap().remove("revoked_at");
+        }
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+    assert!(git(&repo, &["add", "-A"]).status.success());
+    assert!(
+        git(&repo, &["-c", "user.name=beta", "-c", "user.email=b@x.y", "commit", "-q", "-m", "rejoin"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&repo, &["push", "--quiet", "origin", "HEAD"]).status.success(),
+        "a device with git write access can always push"
+    );
+
+    // alpha 的快进同步不得采纳这份被篡改的收件人清单。
+    pair.alpha.run_ok_with_env(&["sync"], &[]);
+
+    let recipients: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(pair.alpha.repo().join("recipients.json")).unwrap())
+            .unwrap();
+    let beta_active = recipients["recipients"]
+        .as_object()
+        .unwrap()
+        .values()
+        .any(|r| r["name"] == "beta" && r.get("revoked_at").is_none());
+    assert!(!beta_active, "the revocation must not be undone by a fast-forward");
+
+    // 而且它真的读不到后续写入的内容。
+    pair.alpha.set_secret("openai", "credential", "sk-after-revoke");
+    pair.alpha.run_ok_with_env(&["sync"], &[]);
+    let _ = git(&repo, &["fetch", "--quiet", "origin"]);
+    let _ = git(&repo, &["reset", "--hard", "origin/main"]);
+    let (code, _, _) = pair.beta.expect_failure(&["read", "akey://openai/credential"]);
+    assert_eq!(code, 4, "a revoked device must stay locked out");
+}
+
+/// 在指定仓库里跑一条 git 命令（测试用；与产品代码无关）。
+fn git(repo: &std::path::Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap()
+}
+
 #[test]
 fn a_wrong_recovery_passphrase_cannot_join() {
     let remote = TempDir::new().unwrap();

@@ -91,6 +91,7 @@ open a new revision again.
 |---|---|---|
 | **[docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)** | **AI agents** | How to integrate, how to recover from each exit code, what never to do |
 | **[SKILL.md](SKILL.md)** | **agent harnesses** | The same material as a loadable skill definition |
+| **[docs/SECURITY.md](docs/SECURITY.md)** | **security reviewers** | Threat model, attack simulations, findings and their status |
 | [AGENTS.md](AGENTS.md) | agents **changing** akey | Architecture, conventions, frozen contracts |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | humans | Requirements and external contracts, incl. a feature-by-feature 1Password CLI comparison |
 | [DESIGN.md](DESIGN.md) | humans | Data model, on-disk formats, algorithms, error taxonomy |

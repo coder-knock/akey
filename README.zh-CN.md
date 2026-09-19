@@ -85,6 +85,7 @@ akey init --from git@github.com:you/akey-vault.git --device laptop   # 会问恢
 |---|---|---|
 | **[docs/AGENT-INTEGRATION.zh-CN.md](docs/AGENT-INTEGRATION.zh-CN.md)** | **AI agent** | 怎么接、怎么用、出错怎么自愈、什么绝对不能做 |
 | **[SKILL.md](SKILL.md)** | **agent harness** | 可直接加载的 skill 定义（带触发条件） |
+| **[docs/SECURITY.zh-CN.md](docs/SECURITY.zh-CN.md)** | **安全评估者** | 威胁模型、攻防模拟、发现清单与状态 |
 | [AGENTS.md](AGENTS.md) | 改这个仓库的 agent | 架构、约定、不可动的契约 |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | 人 | 需求与对外契约，含与 1Password CLI 的功能对标 |
 | [DESIGN.md](DESIGN.md) | 人 | 数据模型、磁盘格式、算法、错误码 |

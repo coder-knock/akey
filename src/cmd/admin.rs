@@ -22,7 +22,9 @@ use crate::paths::{self, FILE_MODE};
 use crate::sync::Git;
 use crate::vault::model::{Vault, is_valid_name};
 use crate::vault::recipients::{RecipientKind, Recipients};
-use crate::vault::store::{Store, AGENTS_FILE, RECIPIENTS_FILE, RECOVERY_FILE, VAULT_FILE};
+use crate::vault::store::{
+    Store, AGENTS_FILE, RECIPIENTS_FILE, RECOVERY_FILE, SYNCED_FILES, VAULT_FILE,
+};
 
 /// 恢复密码的最短长度。它是整库的最终后路，别让它成为最弱环节。
 pub const MIN_PASSPHRASE_LEN: usize = 12;
@@ -55,11 +57,13 @@ fn default_device_name() -> String {
 /// 取恢复密码。顺序：`AKEY_RECOVERY_PASSPHRASE` 环境变量 → 非 TTY 时读 stdin → TTY 时提示。
 ///
 /// 非交互场景永远不阻塞：没有 TTY 又没有环境变量时，stdin 读完即失败，而不是挂在提示上。
+///
+/// `confirm = true` 表示**这是要新建的密码**，此时无论来源都必须满足长度下限。
 fn read_passphrase(confirm: bool) -> Result<SecretString> {
     if let Ok(value) = std::env::var("AKEY_RECOVERY_PASSPHRASE")
         && !value.is_empty()
     {
-        return Ok(SecretString::from(value));
+        return enforce_min(SecretString::from(value), confirm);
     }
 
     if !std::io::stdin().is_terminal() {
@@ -71,22 +75,30 @@ fn read_passphrase(confirm: bool) -> Result<SecretString> {
                 "no passphrase available: set AKEY_RECOVERY_PASSPHRASE or pipe it on stdin",
             ));
         }
-        return Ok(SecretString::from(line));
+        return enforce_min(SecretString::from(line), confirm);
     }
 
     let first = rpassword::prompt_password("Recovery passphrase: ")?;
-    if first.len() < MIN_PASSPHRASE_LEN {
-        return Err(Error::usage(format!(
-            "passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
-        )));
-    }
     if confirm {
         let second = rpassword::prompt_password("Repeat passphrase: ")?;
         if first != second {
             return Err(Error::usage("passphrases do not match"));
         }
     }
-    Ok(SecretString::from(first))
+    enforce_min(SecretString::from(first), confirm)
+}
+
+/// 只在**新建**密码时卡长度。
+///
+/// 反过来（对已有密码也卡长度）会让收紧策略变成自杀：老金库的密码一旦短于新下限，
+/// 就再也 unlock / rotate / 引导不了，而它本该还能用。
+fn enforce_min(passphrase: SecretString, is_new: bool) -> Result<SecretString> {
+    if is_new && passphrase.expose_secret().len() < MIN_PASSPHRASE_LEN {
+        return Err(Error::usage(format!(
+            "passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
+        )));
+    }
+    Ok(passphrase)
 }
 
 /// 取**新**的恢复密码。允许用 `AKEY_NEW_RECOVERY_PASSPHRASE` 与旧密码分开提供——
@@ -95,12 +107,7 @@ fn read_new_passphrase() -> Result<SecretString> {
     if let Ok(value) = std::env::var("AKEY_NEW_RECOVERY_PASSPHRASE")
         && !value.is_empty()
     {
-        if value.len() < MIN_PASSPHRASE_LEN {
-            return Err(Error::usage(format!(
-                "passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
-            )));
-        }
-        return Ok(SecretString::from(value));
+        return enforce_min(SecretString::from(value), true);
     }
     read_passphrase(true)
 }
@@ -174,7 +181,6 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
         repo: repo.clone(),
         remote: args.remote.clone(),
         device_name: device_name.clone(),
-        reveal_allowed: true,
         created_at: now,
     };
     config.save(&ctx.paths)?;
@@ -183,7 +189,7 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
     if !git.is_repo() {
         git.init()?;
     }
-    git.add_all()?;
+    git.add_paths(SYNCED_FILES)?;
     git.commit("akey: initialize vault")?;
 
     let mut steps = vec!["created device identity".to_string(), "created vault".to_string()];
@@ -297,12 +303,11 @@ fn init_from_remote(
         repo: repo.clone(),
         remote: Some(url.to_string()),
         device_name: device_name.clone(),
-        reveal_allowed: true,
         created_at: now,
     };
     config.save(&ctx.paths)?;
 
-    git.add_all()?;
+    git.add_paths(SYNCED_FILES)?;
     git.commit(&format!("akey: add device {device_name}"))?;
     let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
 
@@ -386,6 +391,8 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
         }
 
         DevicesCommand::Add { name } => {
+            // 令牌是只读凭据：改组收件人等于改密码学边界，必须用本机身份。
+            ctx.gate_write()?;
             let name = name.clone().unwrap_or_else(|| store.config.device_name.clone());
             if ctx.dry_run {
                 return ctx.out.emit(
@@ -402,7 +409,7 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 store.save_with(&vault, &recipients)
             })?;
             let git = git_for(&store);
-            git.add_all()?;
+            git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: re-add device {name}"))?;
             audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
             ctx.out.emit(
@@ -412,6 +419,7 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
         }
 
         DevicesCommand::Rm { name } => {
+            ctx.gate_write()?;
             if *name == store.config.device_name {
                 return Err(Error::usage(format!(
                     "refusing to remove this device ('{name}'): it would immediately lock this \
@@ -434,7 +442,7 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 store.save_with(&vault, &recipients)
             })?;
             let git = git_for(&store);
-            git.add_all()?;
+            git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: revoke device {name}"))?;
             let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
             audit::record(&ctx.paths, store.identity.name(), Action::DeviceRemove, Some(name), "ok")?;
@@ -445,6 +453,7 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
         }
 
         DevicesCommand::Rename { old, new } => {
+            ctx.gate_write()?;
             if !is_valid_name(new) {
                 return Err(Error::usage(format!("invalid device name '{new}'")));
             }
@@ -463,7 +472,7 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 recipients.save(&store.recipients_path())
             })?;
             let git = git_for(&store);
-            git.add_all()?;
+            git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: rename device {old} -> {new}"))?;
             ctx.out.emit(
                 format!("renamed '{old}' to '{new}'"),
@@ -478,6 +487,8 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
 pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
     match &args.command {
         RecoveryCommand::Set => {
+            // 令牌若能设恢复密码，就等于给自己留了一把运营者看不见的后门钥匙。
+            ctx.gate_write()?;
             let passphrase = read_passphrase(true)?;
             set_recovery(ctx, passphrase)?;
             let store = ctx.store()?;
@@ -487,12 +498,13 @@ pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
             )
         }
         RecoveryCommand::Rotate => {
+            ctx.gate_write()?;
             let store = ctx.store()?;
             let passphrase = read_passphrase(false)?;
             let new_passphrase = read_new_passphrase()?;
             rotate_recovery(&store, &passphrase, &new_passphrase)?;
             let git = git_for(&store);
-            git.add_all()?;
+            git.add_paths(SYNCED_FILES)?;
             git.commit("akey: rotate recovery passphrase")?;
             ctx.out.emit(
                 "recovery passphrase rotated",
@@ -555,7 +567,7 @@ fn set_recovery(ctx: &Ctx, passphrase: SecretString) -> Result<()> {
     })?;
 
     let git = git_for(&store);
-    git.add_all()?;
+    git.add_paths(SYNCED_FILES)?;
     git.commit("akey: set recovery passphrase")?;
     Ok(())
 }
@@ -610,6 +622,9 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             deny_reveal,
             ttl,
         } => {
+            // 关键：不加这道闸门，一个被限制在单条目上的令牌可以铸出**无限制**令牌，
+            // 再拿它读全库——作用域当场归零。实测可复现。
+            ctx.gate_write()?;
             if !is_valid_name(name) {
                 return Err(Error::usage(format!("invalid token name '{name}'")));
             }
@@ -640,7 +655,7 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             })?;
 
             let git = git_for(&store);
-            git.add_all()?;
+            git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: issue token {name}"))?;
             audit::record(&ctx.paths, store.identity.name(), Action::TokenIssue, Some(name), "ok")?;
 
@@ -698,6 +713,7 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
         }
 
         TokenCommand::Rm { name } => {
+            ctx.gate_write()?;
             let now = Utc::now();
             let id = store.update(|vault| {
                 let meta = vault
@@ -713,7 +729,7 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
                 Ok(id)
             })?;
             let git = git_for(&store);
-            git.add_all()?;
+            git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: revoke token {name}"))?;
             audit::record(&ctx.paths, store.identity.name(), Action::TokenRevoke, Some(name), "ok")?;
             ctx.out.emit(
@@ -1327,6 +1343,22 @@ mod tests {
             decrypt_recovery(&store, &SecretString::from("second-passphrase-here")).unwrap();
         let bootstrap = DeviceIdentity::parse(&payload.bootstrap_identity, "bootstrap").unwrap();
         assert!(bootstrap.decrypt(&fs::read(store.vault_path()).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn passphrase_minimum_applies_to_new_ones_only() {
+        let short = SecretString::from("a");
+        let long = SecretString::from("long-enough-to-be-a-passphrase");
+
+        // 新建：无论来源都必须够长（这条以前只在 TTY 路径成立，
+        // 走 AKEY_RECOVERY_PASSPHRASE 时能设出 1 字符的密码）。
+        assert!(enforce_min(short.clone(), true).is_err());
+        assert_eq!(enforce_min(short.clone(), true).unwrap_err().exit_code(), 2);
+        assert!(enforce_min(long.clone(), true).is_ok());
+
+        // 使用已有的：绝不能卡长度，否则收紧策略会让老金库彻底打不开。
+        assert!(enforce_min(short, false).is_ok());
+        assert!(enforce_min(long, false).is_ok());
     }
 
     #[test]

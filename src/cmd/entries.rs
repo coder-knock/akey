@@ -816,9 +816,13 @@ fn parse_assignment(spec: &str) -> Result<Assignment> {
 
     let (head, ty) = match split_unescaped(lhs, '[') {
         Some((head, rest)) => {
-            let inner = rest.strip_suffix(']').filter(|inner| {
-                !inner.is_empty() && !inner.contains(['[', ']'])
-            });
+            // 两种写法都收：`field[type]` 与 1Password 式的 `field[[type]]`。
+            // DESIGN.md 一直写的是后者，而解析器只吃前者——文档与实现不一致本身就是缺陷。
+            let inner = rest
+                .strip_suffix(']')
+                .map(|inner| inner.strip_prefix('[').unwrap_or(inner))
+                .map(|inner| inner.strip_suffix(']').unwrap_or(inner))
+                .filter(|inner| !inner.is_empty() && !inner.contains(['[', ']']));
             let inner = inner.ok_or_else(|| {
                 Error::usage(format!(
                     "malformed type suffix in '{spec}'; expected field[type]=value"

@@ -441,11 +441,7 @@ pub struct LogArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct DoctorArgs {
-    /// 面向 agent 的自检：额外检查令牌、冲突与权限位
-    #[arg(long)]
-    pub agent: bool,
-}
+pub struct DoctorArgs {}
 
 #[derive(Debug, Args)]
 pub struct SchemaArgs {}

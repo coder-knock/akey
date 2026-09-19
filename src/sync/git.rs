@@ -134,6 +134,29 @@ impl Git {
         Ok(())
     }
 
+    /// 只暂存指定路径。用于避免把误落进仓库目录的文件一起提交。
+    ///
+    /// 必须过滤掉"既不在磁盘上、也不在索引里"的路径：`git add -A -- <pathspec>` 遇到
+    /// 这样的路径会直接报错（`init` 时 `recovery.age` 就还不存在）。
+    pub fn add_paths(&self, paths: &[&str]) -> Result<()> {
+        let tracked = self.run(&["ls-files"])?;
+        let tracked: std::collections::HashSet<&str> = tracked.lines().collect();
+
+        let wanted: Vec<&str> = paths
+            .iter()
+            .copied()
+            .filter(|path| self.repo.join(path).exists() || tracked.contains(path))
+            .collect();
+
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        let mut args = vec!["add", "-A", "--"];
+        args.extend_from_slice(&wanted);
+        self.run(&args)?;
+        Ok(())
+    }
+
     /// 提交暂存区。无内容可提交时返回 `false`（不是错误）。
     ///
     /// 先自己问 git"有没有暂存内容"，而不是解析 `nothing to commit` 那句文案：

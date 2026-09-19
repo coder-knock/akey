@@ -19,6 +19,13 @@ pub const RECOVERY_FILE: &str = "recovery.age";
 pub const RECIPIENTS_FILE: &str = "recipients.json";
 pub const AGENTS_FILE: &str = "AGENTS.md";
 
+/// 会被提交进同步仓库的文件**白名单**。
+///
+/// 为什么不用 `git add -A`：那会把落进仓库目录的**任何**文件一起提交。用户或脚本一旦
+/// 误把明文写到那里（`akey inject -o repo/x.txt` 就够了），一次 `sync` 就把它永久写进
+/// git 历史并推到远端——而 git 历史是删不干净的。只 add 已知文件，让这种失误停在本地。
+pub const SYNCED_FILES: &[&str] = &[VAULT_FILE, RECIPIENTS_FILE, RECOVERY_FILE, AGENTS_FILE, ".gitignore"];
+
 /// 一个已解锁的本地视图：本机身份 + 配置 + 仓库位置。
 pub struct Store {
     pub paths: Paths,
@@ -162,7 +169,6 @@ mod tests {
             repo,
             remote: None,
             device_name: "testbox".into(),
-            reveal_allowed: true,
             created_at: now,
         }
         .save(&paths)

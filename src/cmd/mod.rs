@@ -172,6 +172,59 @@ impl Ctx {
     pub fn scoped_names(&self, vault: &Vault) -> Result<Option<Vec<String>>> {
         Ok(self.active_token(vault)?.and_then(|meta| meta.allow.clone()))
     }
+
+    /// `--debug` 的诊断行。一律走 stderr，且**只报位置**，不报任何值。
+    ///
+    /// 这个 flag 以前是死的（除了赋值没人读它），对一个"agent 要自己诊断"的工具来说
+    /// 那是文档撒谎。现在它至少回答"我到底在操作哪个 home、哪个仓库"。
+    pub fn debug_banner(&self) {
+        if !self.debug {
+            return;
+        }
+        eprintln!("debug: home  = {}", self.paths.home.display());
+        eprintln!(
+            "debug: repo  = {}",
+            self.repo_override
+                .as_deref()
+                .map_or_else(|| "(from config.toml)".to_string(), |p| p.display().to_string())
+        );
+        eprintln!("debug: format = {}", if self.out.is_json() { "json" } else { "human" });
+        eprintln!(
+            "debug: token  = {}",
+            if self.token.is_some() { "present (value withheld)" } else { "none" }
+        );
+    }
+
+    /// 当前主体是否被禁止拿到明文。
+    ///
+    /// 为真时，任何"明文会抵达调用者"的路径都必须关闭，包括 `--no-masking`。
+    pub fn plaintext_forbidden(&self, vault: &Vault) -> Result<bool> {
+        if no_reveal_env() {
+            return Ok(true);
+        }
+        Ok(self
+            .active_token(vault)?
+            .is_some_and(|meta| meta.deny_reveal))
+    }
+
+    /// 对文本里出现的每个引用，按其所属条目过一遍 reveal 闸门。
+    ///
+    /// `inject` 必须用它。设计上曾把 `inject` 和 `run` 归为一类（"不把明文交给调用者"）——
+    /// 这对 `run` 成立（明文进的是**子进程**，且子进程回显被掩蔽），
+    /// 对 `inject` **不成立**：渲染结果写的就是调用者的 stdout，它是 `read` 的批量版。
+    /// 少了这道闸门，`AKEY_NO_REVEAL` 与令牌的 `--deny-reveal` 都能被一句
+    /// `printf 'x=akey://a/b' | akey inject` 绕过。
+    pub fn gate_references_reveal(&self, vault: &Vault, texts: &[String]) -> Result<()> {
+        for text in texts {
+            for raw in crate::reference::extract_references(text) {
+                let reference =
+                    crate::reference::Reference::parse_in(&raw, &|name| std::env::var(name).ok())?;
+                let entry = vault.find(&reference.item)?;
+                self.gate_reveal(vault, Some(entry))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `AKEY_NO_REVEAL` 只要非空且不是 `0`/`false` 即生效。
@@ -225,6 +278,7 @@ pub fn run() -> i32 {
             return err.exit_code();
         }
     };
+    ctx.debug_banner();
     match dispatch(&ctx, cli.command) {
         Ok(()) => 0,
         Err(err) => {
