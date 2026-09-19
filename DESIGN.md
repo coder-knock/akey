@@ -8,6 +8,9 @@
 
 > 依据 `REQUIREMENTS.md` v0.2。开发顺序：**文档 → 测试 → 实现**；本文定义测试可断言的**全部接口与格式**。
 > 名词：**条目** = entry（一个凭证）；**字段** = field；**引用** = reference URI。
+>
+> 可视化：三张可交互图（架构 / `sync` 流程 / `run` 时序）在 [`docs/diagrams/`](docs/diagrams/)，
+> 均为独立 HTML，浏览器直接打开；每张由同名 JSON 规格生成，见 README 的「图表」一节。
 
 ---
 

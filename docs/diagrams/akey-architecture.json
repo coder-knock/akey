@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "akey 系统架构",
+    "locale": "zh-CN",
+    "output": "akey-architecture.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "Agent / 用户",
+      "sublabel": "调用方",
+      "pos": [
+        40,
+        280
+      ],
+      "size": [
+        130,
+        64
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "backend",
+      "label": "akey CLI",
+      "sublabel": "单二进制 · 无守护进程",
+      "pos": [
+        360,
+        280
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "store",
+      "type": "backend",
+      "label": "Vault Store",
+      "sublabel": "鉴权 → 解密 → 原子写",
+      "pos": [
+        680,
+        280
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "child",
+      "type": "external",
+      "label": "子进程",
+      "sublabel": "拿到明文的唯一一方",
+      "pos": [
+        1060,
+        280
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "database",
+      "label": "audit.log",
+      "sublabel": "只记条目 ID",
+      "pos": [
+        360,
+        80
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "identity",
+      "type": "security",
+      "label": "identity.key",
+      "sublabel": "X25519 私钥",
+      "pos": [
+        700,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "0600"
+    },
+    {
+      "id": "config",
+      "type": "security",
+      "label": "config.toml",
+      "sublabel": "trusted 信任集合",
+      "pos": [
+        890,
+        80
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "0600"
+    },
+    {
+      "id": "recipients",
+      "type": "database",
+      "label": "recipients.json",
+      "sublabel": "谁存在（目录，非授权）",
+      "pos": [
+        690,
+        470
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "database",
+      "label": "vault.age",
+      "sublabel": "age 密文条目库",
+      "pos": [
+        900,
+        470
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "masker",
+      "type": "security",
+      "label": "输出遮蔽器",
+      "sublabel": "跨块匹配 · 保留窗口",
+      "pos": [
+        1060,
+        650
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "remote",
+      "type": "cloud",
+      "label": "git 远端",
+      "sublabel": "不可信 · 只存密文",
+      "pos": [
+        890,
+        650
+      ],
+      "size": [
+        160,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "本机私有目录 $AKEY_HOME（进不了 git）",
+      "wraps": [
+        "audit",
+        "identity",
+        "config"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "金库仓库 repo/（只有密文离开本机）",
+      "wraps": [
+        "recipients",
+        "vault"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "agent-to-cli",
+      "from": "agent",
+      "to": "cli",
+      "label": "akey run --with KEY=akey://…",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cli-to-store",
+      "from": "cli",
+      "to": "store",
+      "label": "解析引用 · 鉴权早于解密"
+    },
+    {
+      "id": "store-to-child",
+      "from": "store",
+      "to": "child",
+      "label": "注入明文环境变量",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cli-to-audit",
+      "from": "cli",
+      "to": "audit",
+      "label": "无值留痕",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "identity-to-store",
+      "from": "identity",
+      "to": "store",
+      "label": "本机私钥解密",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "config-to-store",
+      "from": "config",
+      "to": "store",
+      "label": "trusted ∩ 收件人",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "store-to-recipients",
+      "from": "store",
+      "to": "recipients",
+      "label": "读 / 写目录",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24,
+      "labelDx": -44
+    },
+    {
+      "id": "store-to-vault",
+      "from": "store",
+      "to": "vault",
+      "label": "读 / 写 age 密文",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "vault-to-remote",
+      "from": "vault",
+      "to": "remote",
+      "label": "pull / push 密文",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "child-to-masker",
+      "from": "child",
+      "to": "masker",
+      "label": "stdout / stderr",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "masker-to-agent",
+      "from": "masker",
+      "to": "agent",
+      "label": "遮蔽后的输出",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "明文只到子进程",
+      "items": [
+        "run 把明文注入子进程的环境变量，仅它可见",
+        "调用者拿到的是遮蔽后的输出",
+        "遮蔽器跨读取块匹配，保留窗口足够长才下结论"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "访问决策留在本机",
+      "items": [
+        "recipients.json 只说「谁存在」，且由不可信远端分发",
+        "加密对象是 recipients ∩ config.trusted",
+        "远端塞进的公钥在获本地批准前拿不到任何密文"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "静态加密与成本",
+      "items": [
+        "age：X25519 + ChaCha20-Poly1305，热路径上无 KDF",
+        "scrypt 只在 init 与 recovery 时跑",
+        "每台设备一把自己的私钥，进不了 git"
+      ]
+    }
+  ]
+}

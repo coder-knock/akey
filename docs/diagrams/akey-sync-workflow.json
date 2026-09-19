@@ -1,0 +1,58 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "akey sync 跨设备同步流程",
+    "locale": "zh-CN",
+    "output": "akey-sync-workflow.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "local", "label": "命令与本机仓库" },
+    { "id": "remote", "label": "与远端交换" },
+    { "id": "converge", "label": "比较与收敛" },
+    { "id": "guard", "label": "闸门与失败", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "prep", "label": "准备", "fromCol": 0, "toCol": 1 },
+    { "id": "exchange", "label": "与远端交换", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "converge", "label": "收敛", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["start", "commit_local", "fetch", "compare", "keep_revocations", "fast_forward", "can_decrypt", "report"],
+  "nodes": [
+    { "id": "start", "lane": "local", "col": 0, "width": 180, "type": "backend", "label": "akey sync", "sublabel": "git 仓库 · 配了远端" },
+    { "id": "commit_local", "lane": "local", "col": 1, "width": 180, "type": "backend", "label": "提交本机变更", "sublabel": "add SYNCED_FILES" },
+
+    { "id": "fetch", "lane": "remote", "col": 2, "width": 180, "type": "cloud", "label": "fetch origin", "sublabel": "拿到 FETCH_HEAD" },
+
+    { "id": "compare", "lane": "converge", "col": 3, "width": 185, "type": "backend", "label": "比较 HEAD 与 FETCH_HEAD", "sublabel": "一致 · 领先 · 落后 · 分叉" },
+    { "id": "three_way", "lane": "converge", "col": 4, "width": 180, "type": "backend", "label": "三方合并", "sublabel": "merge_base + 冲突副本" },
+
+    { "id": "refused", "lane": "guard", "col": 2, "width": 180, "type": "security", "label": "拒绝 / 失败", "sublabel": "模式不允许 · push 被拒 ×3" },
+    { "id": "keep_revocations", "lane": "guard", "col": 3, "width": 180, "type": "security", "label": "保留吊销标记", "sublabel": "先于 reset --hard" },
+    { "id": "fast_forward", "lane": "guard", "col": 4, "width": 180, "type": "security", "label": "快进拉取", "sublabel": "reset --hard" },
+    { "id": "can_decrypt", "lane": "guard", "col": 5, "width": 180, "type": "security", "label": "确认仍可解密", "sublabel": "否则 locked" },
+
+    { "id": "report", "lane": "local", "col": 5, "width": 190, "type": "external", "label": "报告结果", "sublabel": "up_to_date · pushed · pulled · merged" }
+  ],
+  "edges": [
+    { "id": "start-commit", "from": "start", "to": "commit_local", "variant": "emphasis", "role": "main" },
+    { "id": "commit-fetch", "from": "commit_local", "to": "fetch", "role": "main" },
+    { "id": "fetch-compare", "from": "fetch", "to": "compare", "role": "main" },
+
+    { "id": "compare-keep", "from": "compare", "to": "keep_revocations", "label": "远端领先", "variant": "emphasis", "role": "main" },
+    { "id": "keep-ff", "from": "keep_revocations", "to": "fast_forward", "variant": "emphasis", "role": "main" },
+    { "id": "ff-decrypt", "from": "fast_forward", "to": "can_decrypt", "variant": "emphasis", "role": "main" },
+    { "id": "decrypt-report", "from": "can_decrypt", "to": "report", "label": "pulled", "variant": "emphasis", "role": "main" },
+
+    { "id": "compare-merge", "from": "compare", "to": "three_way", "label": "分叉", "variant": "emphasis", "role": "branch" },
+    { "id": "merge-report", "from": "three_way", "to": "report", "label": "merged", "role": "branch" },
+
+    { "id": "compare-refused", "from": "compare", "to": "refused", "variant": "security", "role": "error" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "吊销优先于拉取", "items": ["reset --hard 会用远端整体替换工作区，含 recipients.json", "所以先把本地吊销标记合并回去、提交，再落盘远端版本", "否则被 devices rm 的设备只要有 git 写权限，一次 push 就能把自己加回来"] },
+    { "dot": "rose", "title": "拉取后立刻验证", "items": ["被吊销的设备快进后会静默进入「金库在、打不开」", "sync 主动 load 一次，失败就报 locked 并说明落后几个提交", "而不是等用户下一条命令才发现"] },
+    { "dot": "cyan", "title": "三条收敛路径", "items": ["一致 / 领先 → 直接 push", "落后 → 保留吊销，再 reset --hard", "分叉 → merge_base 必须存在，否则拒绝合并"] }
+  ]
+}

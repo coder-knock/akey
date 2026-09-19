@@ -1,2 +1,5 @@
 /target
 .DS_Store
+
+# Archify verification sidecars (regenerable: archify visual-check)
+docs/diagrams/*.visual-check.*

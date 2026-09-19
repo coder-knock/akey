@@ -142,6 +142,18 @@ vault on a fresh machine can bootstrap with no external documentation.
 The specification documents (REQUIREMENTS / DESIGN / TESTPLAN) are written in Chinese; the
 agent-facing and landing documents are bilingual.
 
+## Diagrams
+
+Three explorable diagrams. Each is a single standalone HTML file with inline SVG — open it in a
+browser for pan, zoom, search, relationship tracing, dark/light, and PNG or SVG export. Each one
+is generated from a checked-in JSON spec, so it is regenerated rather than hand-edited.
+
+| | Open | Shows |
+|---|---|---|
+| Architecture | [`akey-architecture.html`](docs/diagrams/akey-architecture.html) | Components, the two trust boundaries, and where plaintext is allowed to exist |
+| Sync workflow | [`akey-sync-workflow.html`](docs/diagrams/akey-sync-workflow.html) | `akey sync` across two machines, including the revocation guard and the three convergence paths |
+| Run sequence | [`akey-run-sequence.html`](docs/diagrams/akey-run-sequence.html) | `akey run` call by call: authorize → decrypt → inject → mask → exit code |
+
 ## Status
 
 Crate version 0.1.0. The CLI is complete and usable: **186 unit + 40 contract + 11 end-to-end

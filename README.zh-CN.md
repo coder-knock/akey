@@ -134,6 +134,18 @@ akey devices trust laptop
 
 规范三件套（REQUIREMENTS / DESIGN / TESTPLAN）为中文；面向 agent 的文档与落地页为中英双语。
 
+## 图表
+
+三张可交互图。每张都是一个独立的 HTML 文件、内联 SVG —— 用浏览器打开即可平移、缩放、搜索、
+沿关系追踪、切换明暗主题，并导出 PNG 或 SVG。三张都由仓库里的 JSON 规格生成，所以是**重新生成**
+而不是手改。
+
+| | 打开 | 说明 |
+|---|---|---|
+| 架构图 | [`akey-architecture.html`](docs/diagrams/akey-architecture.html) | 组件、两条信任边界，以及明文被允许存在的位置 |
+| 流程图 | [`akey-sync-workflow.html`](docs/diagrams/akey-sync-workflow.html) | 跨两台机器的 `akey sync`，含吊销闸门与三条收敛路径 |
+| 交互图 | [`akey-run-sequence.html`](docs/diagrams/akey-run-sequence.html) | `akey run` 的逐次调用：鉴权 → 解密 → 注入 → 遮蔽 → 退出码 |
+
 ## 状态
 
 crate 版本 0.1.0。CLI 完整可用：**186 单元 + 40 契约 + 11 端到端测试**，`cargo clippy` 零警告，
