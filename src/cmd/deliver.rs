@@ -1,11 +1,11 @@
-//! 交付类命令：把秘密送进子进程或模板，而不经过调用者。
+//! Delivery commands: hand secrets to a child process or a template without going through the caller.
 //!
-//! 本模块是"明文出口"的集中地，因此每个出口都要过令牌作用域闸门：
-//! - `read` / `doc get` 取明文 → `Ctx::gate_reveal`（条目策略 + 环境开关 + 令牌策略）
-//! - `run` / `inject` 把明文交给子进程或文件 → `Ctx::authorize_references` / `Ctx::authorize`
-//! - `export` 整批出库 → `gate_reveal` + 只导出作用域内的条目
-//! - `import` / `doc put` 写库 → `Ctx::gate_write`（令牌是只读凭据）
-//! - `mcp` 只暴露元数据，**永不暴露字段值**
+//! This module is where the "plaintext exits" concentrate, so every exit passes the token-scope gate:
+//! - `read` / `doc get` take plaintext → `Ctx::gate_reveal` (entry policy + environment switch + token policy)
+//! - `run` / `inject` hand plaintext to a child process or a file → `Ctx::authorize_references` / `Ctx::authorize`
+//! - `export` dumps the whole vault → `gate_reveal` + only entries inside the scope are exported
+//! - `import` / `doc put` write to the vault → `Ctx::gate_write` (tokens are read-only credentials)
+//! - `mcp` exposes metadata only, and **never exposes field values**
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead as _, Read, Write};
@@ -35,7 +35,7 @@ use crate::vault::model::{
 // read
 // ---------------------------------------------------------------------------
 
-/// `akey read <ref>`：把引用解成明文，写到 stdout 或 `--out-file`。
+/// `akey read <ref>`: resolve a reference to plaintext and write it to stdout or `--out-file`.
 pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
@@ -43,7 +43,7 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
     let entry = vault.find(&reference.item).ok();
 
     if let Err(err) = ctx.gate_reveal(&vault, entry) {
-        // 被拒也要留痕：谁在什么时候试过取哪条明文。
+        // A denial must still leave a trace: who tried to take which plaintext, and when.
         audit::record(
             &ctx.paths,
             store.identity.name(),
@@ -63,8 +63,9 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
     let subject = entry.map_or(reference.item.clone(), |e| e.name.clone());
 
     match &args.out_file {
-        // `--dry-run` 承诺"只预览不落盘"，而把明文写成文件正是它该拦下的事。
-        // 曾经这里直接写盘，于是 `akey --dry-run read … -o f` 照样产出明文文件。
+        // `--dry-run` promises "preview only, nothing on disk", and writing plaintext to a file is
+        // exactly what it must stop. This used to write the file anyway, so `akey --dry-run read … -o f`
+        // still produced a plaintext file.
         Some(path) if ctx.dry_run => {
             ctx.out.emit(
                 format!(
@@ -91,7 +92,7 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
                 }),
             )?;
         }
-        // JSON 模式下 stdout 必须是单个 JSON 文档，明文只能进信封。
+        // In JSON mode stdout must be a single JSON document, so the plaintext can only go inside the envelope.
         None if ctx.out.is_json() => {
             ctx.out.emit(
                 "",
@@ -118,14 +119,14 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
 // run
 // ---------------------------------------------------------------------------
 
-/// `akey run [--with …] [--bundle …] [--env-file …] -- <cmd>`。
+/// `akey run [--with …] [--bundle …] [--env-file …] -- <cmd>`.
 ///
-/// stdout 属于子进程：本命令**不**输出任何信封，否则会污染被运行程序的输出。
+/// stdout belongs to the child process: this command emits **no** envelope, or it would pollute the output of the program being run.
 pub fn run(ctx: &Ctx, args: &RunArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
 
-    // 掩蔽正是"run 不把明文交给调用者"这条承诺的实现方式；关掉它等于放弃承诺。
+    // Masking is exactly how "run never hands plaintext to the caller" is implemented; turning it off means giving that promise up.
     if args.no_masking && ctx.plaintext_forbidden(&vault)? {
         return Err(Error::denied(
             "--no-masking would let the child's output reach you in the clear; it is refused \
@@ -134,7 +135,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> Result<()> {
         ));
     }
 
-    // 授权先于解密：受限令牌不得把作用域外的条目注入子进程。
+    // Authorization comes before decryption: a restricted token must not inject entries from outside its scope into a child process.
     let touch = inject::touch(&vault, &args.with, &args.bundle, &args.env_file)?;
     ctx.authorize_references(&vault, &touch.texts)?;
     for item in &touch.items {
@@ -159,9 +160,9 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> Result<()> {
     )?;
 
     if code != 0 {
-        // 子进程的退出码必须**原样**成为 akey 的退出码，而 `Result` 只能表达错误类别
-        // （映射到 1/2/3… 会污染契约）。审计已落盘、stdout 上没有待刷新的数据，
-        // 所以在这里直接退。
+        // The child's exit code must become akey's exit code **verbatim**, and `Result` can only
+        // express error categories (mapping them to 1/2/3… would pollute the contract). The audit
+        // record is already on disk and stdout has nothing left to flush, so exit right here.
         std::process::exit(code);
     }
     Ok(())
@@ -171,7 +172,7 @@ pub fn run(ctx: &Ctx, args: &RunArgs) -> Result<()> {
 // inject
 // ---------------------------------------------------------------------------
 
-/// `akey inject [-i F] [-o F]`：把模板里的引用渲染成明文。
+/// `akey inject [-i F] [-o F]`: render the references in a template into plaintext.
 pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
     let store = ctx.store()?;
     let vault = store.load()?;
@@ -180,14 +181,14 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
         None => read_stdin()?,
     };
 
-    // 渲染结果会**直接交给调用者**（stdout，或 `-o` 指向一个调用者随后能读的文件），
-    // 所以 inject 与 `read` 同类，是明文通道。条目策略 / AKEY_NO_REVEAL / 令牌
-    // --deny-reveal / 令牌作用域——四道闸门全都要过。
+    // The rendered result goes **straight to the caller** (stdout, or a file at `-o` that the caller
+    // can then read), so inject is in the same class as `read`: a plaintext channel. Entry policy /
+    // AKEY_NO_REVEAL / token --deny-reveal / token scope — all four gates must be passed.
     ctx.gate_references_reveal(&vault, std::slice::from_ref(&input))?;
 
     let rendered = inject::render_template(&vault, &input)?;
     match &args.out_file {
-        // 同 `read`：`--dry-run` 不得把明文写到磁盘。
+        // Same as `read`: `--dry-run` must not write plaintext to disk.
         Some(path) if ctx.dry_run => {
             ctx.out.emit(
                 format!(
@@ -236,22 +237,23 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
 // export
 // ---------------------------------------------------------------------------
 
-/// `akey export`：整库明文出库（JSON / dotenv / 1Password CSV）。
+/// `akey export`: dump the whole vault as plaintext (JSON / dotenv / 1Password CSV).
 ///
-/// 明文出库是破坏性操作，必须 `--yes`；作用域令牌只能导出它被授权的条目，
-/// 否则 `--allow` 形同虚设。
+/// A plaintext dump is a destructive operation and requires `--yes`; a scoped token may export
+/// only the entries it is authorized for, otherwise `--allow` would be meaningless.
 pub fn export(ctx: &Ctx, args: &ExportArgs) -> Result<()> {
-    // 先挡确认再碰金库：没有 `--yes` 时连数据都不该读。
+    // Block on confirmation before touching the vault: without `--yes` the data should not even be read.
     ctx.confirm("export plaintext")?;
 
     let store = ctx.store()?;
     let vault = store.load()?;
 
-    // 导出等于把明文整批交出去：`AKEY_NO_REVEAL` 与 `deny_reveal` 令牌同样不得放行。
+    // Export means handing out all the plaintext at once: `AKEY_NO_REVEAL` and `deny_reveal` tokens must not pass either.
     ctx.gate_reveal(&vault, None)?;
 
-    // 条目**自身**的 reveal=deny 也必须生效。`gate_reveal(vault, None)` 只看全局策略，
-    // 少了这段，一条被明确标记"永不取明文"的条目会被 export 原样写出去。
+    // The reveal=deny of the entry **itself** must apply as well. `gate_reveal(vault, None)` only
+    // looks at the global policy; without this block, an entry explicitly marked "never take
+    // plaintext" would be written out verbatim by export.
     let denied: Vec<&str> = vault
         .live_entries()
         .filter(|entry| entry.reveal == crate::vault::model::Reveal::Deny)
@@ -306,7 +308,7 @@ pub fn export(ctx: &Ctx, args: &ExportArgs) -> Result<()> {
     Ok(())
 }
 
-/// 导出渲染。`Json` 是整库快照（可直接再 `import` 回来），另外两种是逐字段的扁平形式。
+/// Export rendering. `Json` is a whole-vault snapshot (which `import` can read back directly); the other two are flat, per-field forms.
 fn render_export(vault: &Vault, format: ExportFormat, scope: Option<&[String]>) -> Result<String> {
     match format {
         ExportFormat::Json => {
@@ -327,7 +329,7 @@ fn format_name(format: ExportFormat) -> &'static str {
     }
 }
 
-/// 作用域内的条目才导出；没有令牌限制时全部可见。
+/// Only entries inside the scope are exported; everything is visible when no token restricts it.
 fn in_scope(entry: &Entry, scope: Option<&[String]>) -> bool {
     scope.is_none_or(|names| names.iter().any(|name| name == &entry.name))
 }
@@ -340,7 +342,7 @@ fn restricted_vault(vault: &Vault, scope: Option<&[String]>) -> Vault {
     restricted
 }
 
-/// `NAME=value` 行，名字用大写下划线（与 `run --bundle` 的变量名同源）。
+/// A `NAME=value` line, the name upper-cased and underscored (same origin as the variable names of `run --bundle`).
 fn export_dotenv(vault: &Vault, scope: Option<&[String]>) -> String {
     let mut rows: Vec<String> = Vec::new();
     for entry in vault.live_entries().filter(|e| in_scope(e, scope)) {
@@ -353,14 +355,14 @@ fn export_dotenv(vault: &Vault, scope: Option<&[String]>) -> String {
             ));
         }
     }
-    // 按变量名排序：同一份金库永远导出同样的字节。
+    // Sorted by variable name: the same vault always exports the same bytes.
     rows.sort();
     rows.concat()
 }
 
 const CSV1P_HEADER: &str = "Title,Username,Password,URL,Notes";
 
-/// 1Password CSV：`Title,Username,Password,URL,Notes`，每行一个条目。
+/// 1Password CSV: `Title,Username,Password,URL,Notes`, one entry per row.
 fn export_csv1p(vault: &Vault, scope: Option<&[String]>) -> String {
     let mut out = String::from(CSV1P_HEADER);
     out.push('\n');
@@ -394,7 +396,7 @@ fn field_value(entry: &Entry, label: &str) -> String {
         .unwrap_or_default()
 }
 
-/// 条目的"主秘密"（`env-bundle` 没有这一概念）。
+/// The entry's "primary secret" (`env-bundle` has no such concept).
 fn secret_value(entry: &Entry) -> String {
     let label = entry.category.default_secret_field();
     if label.is_empty() {
@@ -404,8 +406,8 @@ fn secret_value(entry: &Entry) -> String {
     }
 }
 
-/// dotenv 值：含空白或特殊字符时双引号包裹，并转义 `\` `"` 与换行。
-/// 与 [`inject::parse_dotenv`] 的读法互逆。
+/// dotenv value: double-quoted when it contains whitespace or special characters, escaping `\`, `"`
+/// and newlines. The inverse of the way [`inject::parse_dotenv`] reads it.
 fn dotenv_escape(value: &str) -> String {
     let needs_quotes = value.is_empty()
         || value
@@ -452,9 +454,9 @@ fn csv_field(value: &str) -> String {
 // import
 // ---------------------------------------------------------------------------
 
-/// `akey import --format json|dotenv|csv1p`：把外部明文建成条目。
+/// `akey import --format json|dotenv|csv1p`: build entries from external plaintext.
 pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
-    // 令牌是只读凭据：导入（写库）一律拒绝。
+    // Tokens are read-only credentials: import (a vault write) is always refused.
     ctx.gate_write()?;
 
     let store = ctx.store()?;
@@ -472,7 +474,7 @@ pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
         )?,
         other => parse_import(other, &source, &text)?,
     };
-    // 重名与 ID 冲突在落盘之前就判掉，避免写一半失败。
+    // Name and ID conflicts are rejected before anything hits disk, so a failure cannot leave a half-written result.
     let plan = plan_import(&vault, incoming, args.merge)?;
 
     if ctx.dry_run {
@@ -522,7 +524,7 @@ pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
     Ok(())
 }
 
-/// 解析导入文件。
+/// Parse an import file.
 fn parse_import(format: ExportFormat, label: &str, text: &str) -> Result<Vec<Entry>> {
     match format {
         ExportFormat::Json => parse_import_json(label, text),
@@ -567,7 +569,7 @@ fn parse_import_json(label: &str, text: &str) -> Result<Vec<Entry>> {
     )))
 }
 
-/// 手写的条目 JSON 常常省掉这些字段，补上默认值而不是直接拒绝。
+/// Hand-written entry JSON often omits these fields; fill in defaults instead of rejecting it outright.
 fn fill_entry_defaults(item: &mut Value) {
     let Some(object) = item.as_object_mut() else {
         return;
@@ -589,7 +591,7 @@ fn fill_entry_defaults(item: &mut Value) {
 
 fn parse_import_dotenv(name: &str, label: &str, text: &str) -> Result<Vec<Entry>> {
     let pairs = inject::parse_dotenv(label, text)?;
-    // 同名变量取最后一次赋值（dotenv 的常见语义），并按键排序保证确定性。
+    // A repeated variable takes its last assignment (the usual dotenv semantics), and the keys are sorted for determinism.
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     for (key, value) in pairs {
         values.insert(key, value);
@@ -611,8 +613,9 @@ fn parse_import_dotenv(name: &str, label: &str, text: &str) -> Result<Vec<Entry>
     Ok(vec![entry])
 }
 
-/// 环境变量字段：`id` 取变量名的小写形式，这样 `env_name(id)` 能还原出原变量名
-/// （`slug` 会把 `.` / `-` 折叠掉，导入再注入就对不上了）。
+/// Environment variable field: `id` takes the lower-cased variable name so that `env_name(id)`
+/// reconstructs the original name (`slug` folds `.` / `-` away, and import-then-inject would no
+/// longer line up).
 fn env_field(label: &str, value: String) -> Field {
     let mut field = Field::new(label, FieldType::Concealed, value);
     let lower = label.to_ascii_lowercase();
@@ -625,7 +628,7 @@ fn env_field(label: &str, value: String) -> Field {
     field
 }
 
-/// 从导入文件名派生 dotenv 条目的名字（`prod.env` → `prod`，`.env` / stdin → `imported-env`）。
+/// Derive the name of a dotenv entry from the import file name (`prod.env` → `prod`, `.env` / stdin → `imported-env`).
 fn import_entry_name(path: Option<&Path>) -> String {
     let stem = path
         .and_then(|p| p.file_stem())
@@ -694,7 +697,7 @@ fn parse_import_csv(label: &str, text: &str) -> Result<Vec<Entry>> {
                 .fields
                 .push(Field::new("username", FieldType::String, username));
         }
-        // 密码列即使为空也建字段：下游引用 `password` 时结构稳定。
+        // The password column creates a field even when empty: downstream references to `password` then have a stable shape.
         entry.fields.push(Field::new(
             "password",
             FieldType::Concealed,
@@ -709,7 +712,7 @@ fn parse_import_csv(label: &str, text: &str) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-/// 极简 RFC 4180 读法：双引号字段内的 `,` `\n` `""` 都按字面处理。
+/// A minimal RFC 4180 reader: `,`, `\n` and `""` inside a double-quoted field are taken literally.
 fn parse_csv(input: &str) -> Vec<Vec<String>> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut row: Vec<String> = Vec::new();
@@ -740,7 +743,7 @@ fn parse_csv(input: &str) -> Vec<Vec<String>> {
     rows
 }
 
-/// 落盘前的导入计划：创建哪些、合并到哪条。
+/// The import plan, computed before anything reaches disk: what to create, and what to merge into which entry.
 #[derive(Debug, Default)]
 struct ImportPlan {
     creates: Vec<Entry>,
@@ -777,7 +780,7 @@ fn plan_import(vault: &Vault, incoming: Vec<Entry>, merge: bool) -> Result<Impor
             }
             None => {
                 if vault.entries.contains_key(&entry.id) {
-                    // ID 撞上另一条条目：换一个新 ID，绝不覆盖别人的记录。
+                    // The ID collides with another entry: take a fresh ID, never overwrite someone else's record.
                     entry.id = Ulid::generate();
                 }
                 plan.creates.push(entry);
@@ -812,8 +815,9 @@ fn apply_plan(vault: &mut Vault, plan: ImportPlan, now: DateTime<Utc>) -> Import
     report
 }
 
-/// `--merge` 的语义：覆盖同名字段、追加新字段；只动字段与展示性元数据，
-/// 不动 `created_at` / `reveal` / 过期时间——那些是本地策略，不该被导入文件覆盖。
+/// `--merge` semantics: overwrite same-named fields, append new ones; touch only fields and display
+/// metadata, not `created_at` / `reveal` / expiry — those are local policy, and an import file
+/// should not be able to override them.
 fn merge_fields(target: &mut Entry, incoming: &Entry, now: DateTime<Utc>) -> (usize, usize) {
     let (mut written, mut added) = (0, 0);
     for field in &incoming.fields {
@@ -848,7 +852,7 @@ fn merge_fields(target: &mut Entry, incoming: &Entry, now: DateTime<Utc>) -> (us
 // doc
 // ---------------------------------------------------------------------------
 
-/// `akey doc get|put`：任意文件附件（kubeconfig、service-account JSON…）。
+/// `akey doc get|put`: arbitrary file attachments (kubeconfig, service-account JSON…).
 pub fn doc(ctx: &Ctx, args: &DocArgs) -> Result<()> {
     match &args.command {
         DocCommand::Get {
@@ -865,7 +869,7 @@ fn doc_get(ctx: &Ctx, raw: &str, out_file: Option<&Path>) -> Result<()> {
     let reference = Reference::parse_in(raw, &env_lookup)?;
     let entry = vault.find(&reference.item)?;
 
-    // 文件字段也是秘密：条目策略、环境开关、令牌策略一样要过。
+    // A file field is a secret too: entry policy, environment switch and token policy all still apply.
     ctx.gate_reveal(&vault, Some(entry))?;
     if reference.attribute == Attribute::Value {
         require_attachment_field(entry, &reference)?;
@@ -887,7 +891,7 @@ fn doc_get(ctx: &Ctx, raw: &str, out_file: Option<&Path>) -> Result<()> {
                 }),
             )?;
         }
-        // JSON 模式下 stdout 是单个 JSON 文档，二进制只能 base64 进信封。
+        // In JSON mode stdout is a single JSON document, so binary can only ride inside the envelope as base64.
         None if ctx.out.is_json() => {
             ctx.out.emit(
                 "",
@@ -913,7 +917,7 @@ fn doc_get(ctx: &Ctx, raw: &str, out_file: Option<&Path>) -> Result<()> {
 }
 
 fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
-    // 令牌是只读凭据：写操作一律拒绝。
+    // Tokens are read-only credentials: write operations are always refused.
     ctx.gate_write()?;
     if label.trim().is_empty() {
         return Err(Error::usage("--field must not be empty"));
@@ -977,7 +981,7 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// `doc get` 只认 `file` 字段——别的字段是秘密值，应该走 `read`。
+/// `doc get` accepts only the `file` field — other fields are secret values and belong to `read`.
 fn require_attachment_field<'a>(entry: &'a Entry, reference: &Reference) -> Result<&'a Field> {
     let field = reference::find_field(entry, reference)?;
     if field.ty != FieldType::File {
@@ -1003,9 +1007,9 @@ fn decode_attachment(encoded: &str) -> Result<Vec<u8>> {
 // mcp
 // ---------------------------------------------------------------------------
 
-/// MCP 消息里用到的常量。
+/// Constants used in MCP messages.
 const JSONRPC_VERSION: &str = "2.0";
-/// 客户端没指定协议版本时的回落值。
+/// Fallback used when the client does not specify a protocol version.
 const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 const ERR_PARSE: i64 = -32700;
 const ERR_INVALID_REQUEST: i64 = -32600;
@@ -1013,10 +1017,10 @@ const ERR_METHOD_NOT_FOUND: i64 = -32601;
 const ERR_INVALID_PARAMS: i64 = -32602;
 const ERR_SERVER: i64 = -32000;
 
-/// `akey mcp`：stdio 上的 JSON-RPC 2.0 服务（**换行分隔**，不是 LSP 的 Content-Length 帧）。
+/// `akey mcp`: a JSON-RPC 2.0 service over stdio (**newline-delimited**, not LSP-style Content-Length frames).
 ///
-/// FR-16 的安全底线：这条通路只暴露条目名、分类、标签与 `akey://` 引用，
-/// **任何情况下都不得返回字段值**。
+/// The FR-16 security floor: this channel exposes only entry names, categories, tags and
+/// `akey://` references, and **must never return field values** under any circumstances.
 pub fn mcp(ctx: &Ctx) -> Result<()> {
     let store = ctx.store()?;
     let stdin = std::io::stdin();
@@ -1030,7 +1034,7 @@ pub fn mcp(ctx: &Ctx) -> Result<()> {
         let message: Value = match serde_json::from_str(&line) {
             Ok(message) => message,
             Err(e) => {
-                // 连 id 都拿不到：按 JSON-RPC 规定用 null id 回错。
+                // Not even an id is available: per JSON-RPC, reply with a null id.
                 write_message(
                     &mut stdout,
                     &error_response(Value::Null, ERR_PARSE, &format!("invalid JSON: {e}")),
@@ -1040,8 +1044,8 @@ pub fn mcp(ctx: &Ctx) -> Result<()> {
         };
 
         let response = if message.get("method").and_then(Value::as_str) == Some("tools/call") {
-            // 每次调用现解密：MCP 是长驻进程，别把金库快照攥在手里，
-            // 也别让"未解锁"把 `initialize` 一起打死。
+            // Decrypt afresh on every call: MCP is a long-lived process, so do not hold a vault
+            // snapshot in hand, and do not let "locked" kill `initialize` along with it.
             match store.load() {
                 Ok(vault) => handle_message(Some(&vault), &message),
                 Err(err) => message
@@ -1067,10 +1071,10 @@ fn write_message(out: &mut impl Write, message: &Value) -> Result<()> {
     Ok(())
 }
 
-/// 处理一条 JSON-RPC 消息。返回 `None` 表示这是通知，不应回复。
+/// Handle one JSON-RPC message. `None` means this is a notification and must not be answered.
 ///
-/// `vault` 为 `None` 时只有需要金库的方法失败：`initialize` / `ping` /
-/// `tools/list` 在未初始化或未解锁的机器上同样要能应答。
+/// When `vault` is `None`, only the methods that need a vault fail: `initialize` / `ping` /
+/// `tools/list` must still answer on a machine that is uninitialized or locked.
 fn handle_message(vault: Option<&Vault>, message: &Value) -> Option<Value> {
     let Some(object) = message.as_object() else {
         return Some(error_response(
@@ -1083,7 +1087,7 @@ fn handle_message(vault: Option<&Vault>, message: &Value) -> Option<Value> {
     let Some(method) = object.get("method").and_then(Value::as_str) else {
         return id.map(|id| error_response(id, ERR_INVALID_REQUEST, "request has no method"));
     };
-    // 没有 id 的消息是通知：即便方法未知也不回复（JSON-RPC 2.0 §4.1）。
+    // A message without an id is a notification: even an unknown method gets no reply (JSON-RPC 2.0 §4.1).
     let respond = |result: Value| id.clone().map(|id| result_response(id, result));
 
     match method {
@@ -1164,7 +1168,7 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
     })
 }
 
-/// 工具结果正文：MCP 要求 `content[].text` 是字符串，所以载荷序列化成 JSON 文本。
+/// Tool result body: MCP requires `content[].text` to be a string, so the payload is serialized as JSON text.
 fn tool_text(payload: &Value) -> Value {
     json!({ "content": [ { "type": "text", "text": payload.to_string() } ] })
 }
@@ -1173,7 +1177,7 @@ fn tool_error(message: &str) -> Value {
     json!({ "content": [ { "type": "text", "text": message } ], "isError": true })
 }
 
-/// 只暴露"名字与元数据"的两个工具。写操作刻意不提供：见 `Ctx::gate_write` 的取向。
+/// Exposes only the two "name and metadata" tools. Write operations are deliberately absent: see the stance of `Ctx::gate_write`.
 fn tool_definitions() -> Value {
     json!([
         {
@@ -1224,8 +1228,8 @@ fn list_payload(vault: &Vault, arguments: &Value) -> Value {
     json!({ "entries": entries })
 }
 
-/// 条目元数据。**不含字段值**，也不含 `url` / `notes`——它们可能夹带秘密
-/// （URL 里带 token 的查询串很常见）。
+/// Entry metadata. **No field values**, and no `url` / `notes` either — those can smuggle
+/// secrets (a URL query string carrying a token is very common).
 fn entry_meta(entry: &Entry) -> Value {
     json!({
         "id": entry.id.to_string(),
@@ -1239,7 +1243,7 @@ fn entry_meta(entry: &Entry) -> Value {
     })
 }
 
-/// 单条条目的元数据 + 字段引用。**值一律不返回**。
+/// One entry's metadata plus field references. **Values are never returned**.
 fn entry_payload(vault: &Vault, item: &str) -> Result<Value> {
     let entry = vault.find(item)?;
     let fields: Vec<Value> = entry
@@ -1260,8 +1264,8 @@ fn entry_payload(vault: &Vault, item: &str) -> Result<Value> {
     Ok(json!({ "entry": entry_meta(entry), "fields": fields }))
 }
 
-/// 字段的 `akey://` 引用。section 含引用段不允许的字符（空格等）时省略它，
-/// 让引用至少是可用的。
+/// A field's `akey://` reference. When the section contains characters a reference segment
+/// forbids (spaces, say), omit it so the reference stays usable at least.
 fn field_reference(entry: &Entry, field: &Field) -> String {
     let build = |section: Option<&str>| {
         Reference {
@@ -1283,7 +1287,7 @@ fn field_reference(entry: &Entry, field: &Field) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 小工具
+// helpers
 // ---------------------------------------------------------------------------
 
 fn env_lookup(name: &str) -> Option<String> {
@@ -1327,7 +1331,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// 只应出现在金库里、绝不该出现在任何输出里的哨兵值。
+    /// Sentinel values that should only ever exist in the vault and must never show up in any output.
     const SENTINEL: &str = "sk-SENTINEL-DO-NOT-LEAK-9876543210";
     const OTHER_SENTINEL: &str = "pw-OTHER-SENTINEL-1234567890";
 
@@ -1335,8 +1339,8 @@ mod tests {
         Ulid::from_bytes([tag; 16])
     }
 
-    /// 一台真正落盘的"设备"：config + identity + recipients + vault.age。
-    /// 命令层要读真金库，所以这里不造假 Store，而是把夹具建全。
+    /// A real, on-disk "device": config + identity + recipients + vault.age. The command layer
+    /// reads a real vault, so instead of faking a Store this builds the full fixture.
     struct Fixture {
         dir: TempDir,
         home: PathBuf,
@@ -1345,21 +1349,23 @@ mod tests {
     }
 
     fn fixture(tokens: Vec<token::IssuedToken>) -> Fixture {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temporary directory");
         let home = dir.path().join("akey");
         let repo = dir.path().join("repo");
         let paths = Paths::new(home.clone());
-        paths.ensure().expect("创建 home");
+        paths.ensure().expect("create home");
 
         let identity = DeviceIdentity::generate("test-device");
-        identity.save(&paths.identity).expect("写本机身份");
+        identity.save(&paths.identity).expect("write the local identity");
         let config = Config {
             repo: repo.clone(),
             remote: None,
             device_name: "test-device".to_string(),
+            trusted: std::collections::BTreeMap::from([(identity.pubkey(), Utc::now())]),
+            trust_seeded: true,
             created_at: Utc::now(),
         };
-        config.save(&paths).expect("写配置");
+        config.save(&paths).expect("write the config");
 
         let mut recipients = Recipients::default();
         recipients.add(
@@ -1370,7 +1376,7 @@ mod tests {
         );
         recipients
             .save(&repo.join(crate::vault::store::RECIPIENTS_FILE))
-            .expect("写收件人");
+            .expect("write the recipients");
 
         let now = Utc::now();
         let mut vault = Vault::default();
@@ -1404,7 +1410,7 @@ mod tests {
             config,
             identity,
         };
-        store.save(&vault).expect("写金库");
+        store.save(&vault).expect("write the vault");
         Fixture {
             dir,
             home,
@@ -1413,24 +1419,25 @@ mod tests {
         }
     }
 
-    /// 用真实的 clap 解析构造 `Ctx`（`--home` 指向夹具，绝不碰 `$HOME`）。
+    /// Build a `Ctx` through the real clap parser (`--home` points at the fixture, never at `$HOME`).
     ///
-    /// 只传全局标志 + 一个无参命令：命令函数本身直接调用，argv 只是用来把
-    /// `--home` / `--token` / `--yes` 这些全局状态装进 `Ctx`。
+    /// Only global flags plus a no-argument command are passed: the command function itself is
+    /// called directly, and argv exists only to load global state such as `--home` / `--token` /
+    /// `--yes` into `Ctx`.
     fn ctx_with(home: &Path, globals: &[&str]) -> Ctx {
-        let home = home.to_str().expect("临时路径应为 UTF-8");
+        let home = home.to_str().expect("a temporary path should be UTF-8");
         let mut argv: Vec<&str> = vec!["akey", "--home", home];
         argv.extend_from_slice(globals);
         argv.push("whoami");
-        let cli = Cli::try_parse_from(argv).expect("cli 应能解析");
+        let cli = Cli::try_parse_from(argv).expect("cli should parse");
         Ctx::new(&cli).expect("ctx")
     }
 
     fn issued_token(allow: Option<Vec<String>>) -> token::IssuedToken {
-        token::issue("ci", allow, false, None, Utc::now()).expect("签发令牌")
+        token::issue("ci", allow, false, None, Utc::now()).expect("issue the token")
     }
 
-    /// 让子进程把某个环境变量写进文件：用来证明"子进程到底跑没跑、拿到了什么"。
+    /// Make a child process write an environment variable into a file: proof of whether the child ran at all, and what it received.
     fn sh_write(path: &Path, var: &str) -> Vec<String> {
         vec![
             "sh".to_string(),
@@ -1466,9 +1473,9 @@ mod tests {
                 no_newline: false,
             },
         )
-        .expect("read 应成功");
+        .expect("read should succeed");
         assert_eq!(
-            std::fs::read_to_string(&out).expect("读回"),
+            std::fs::read_to_string(&out).expect("read back"),
             format!("{SENTINEL}\n")
         );
 
@@ -1480,13 +1487,13 @@ mod tests {
                 no_newline: true,
             },
         )
-        .expect("read 应成功");
-        assert_eq!(std::fs::read_to_string(&out).expect("读回"), SENTINEL);
+        .expect("read should succeed");
+        assert_eq!(std::fs::read_to_string(&out).expect("read back"), SENTINEL);
 
-        let log = std::fs::read_to_string(&fx.store.paths.audit).expect("审计日志");
+        let log = std::fs::read_to_string(&fx.store.paths.audit).expect("audit log");
         assert!(log.contains("\"read\""), "{log}");
         assert!(log.contains("openai"), "{log}");
-        assert!(!log.contains(SENTINEL), "审计不得含明文：{log}");
+        assert!(!log.contains(SENTINEL), "the audit log must not contain plaintext: {log}");
     }
 
     #[test]
@@ -1494,7 +1501,7 @@ mod tests {
         let fx = fixture(Vec::new());
         let mut vault = fx.vault.clone();
         vault.entries.get_mut(&ulid(1)).expect("openai").reveal = Reveal::Deny;
-        fx.store.save(&vault).expect("写金库");
+        fx.store.save(&vault).expect("write the vault");
 
         let out = fx.dir.path().join("value.txt");
         let ctx = ctx_with(&fx.home, &[]);
@@ -1506,12 +1513,12 @@ mod tests {
                 no_newline: false,
             },
         )
-        .expect_err("reveal=deny 必须拒绝");
+        .expect_err("reveal=deny must be refused");
         assert_eq!(err.exit_code(), 7);
         assert!(matches!(err, Error::Denied(_)), "{err:?}");
-        assert!(!out.exists(), "被拒时不得落盘");
+        assert!(!out.exists(), "nothing may be written to disk when denied");
 
-        let log = std::fs::read_to_string(&fx.store.paths.audit).expect("审计日志");
+        let log = std::fs::read_to_string(&fx.store.paths.audit).expect("audit log");
         assert!(log.contains("denied"), "{log}");
         assert!(log.contains("openai"), "{log}");
         assert!(!log.contains(SENTINEL), "{log}");
@@ -1528,25 +1535,25 @@ mod tests {
             out_file: Some(out.clone()),
         };
 
-        let err = export(&ctx_with(&fx.home, &[]), &args).expect_err("无 --yes");
+        let err = export(&ctx_with(&fx.home, &[]), &args).expect_err("no --yes");
         assert_eq!(err.exit_code(), 2);
         assert_eq!(err.code(), "usage");
         assert!(err.to_string().contains("--yes"), "{err}");
-        assert!(!out.exists(), "没有 --yes 时不得落盘");
+        assert!(!out.exists(), "nothing may be written to disk without --yes");
 
-        // 加了 --yes 才会去碰金库：用一个没初始化过的 home 证明闸门在读取之前。
-        let empty = tempfile::tempdir().expect("临时目录");
+        // Only with --yes does it touch the vault: use an uninitialized home to show the gate runs before the read.
+        let empty = tempfile::tempdir().expect("temporary directory");
         let err = export(&ctx_with(&empty.path().join("akey"), &["--yes"]), &args)
-            .expect_err("未初始化");
-        assert_eq!(err.exit_code(), 4, "闸门通过后才轮到'没初始化'");
+            .expect_err("not initialized");
+        assert_eq!(err.exit_code(), 4, "only after the gate passes does 'not initialized' come up");
     }
 
     #[test]
     fn export_writes_plaintext_and_honours_the_token_scope() {
         let issued = issued_token(Some(vec!["other".to_string()]));
         let plaintext = issued.plaintext.clone();
-        // 一个 `--deny-reveal` 的令牌：它连自己的条目都不该能整批导出。
-        let deny = token::issue("deny", None, true, None, Utc::now()).expect("签发令牌");
+        // A `--deny-reveal` token: it must not even be able to dump its own entries wholesale.
+        let deny = token::issue("deny", None, true, None, Utc::now()).expect("issue the token");
         let deny_plaintext = deny.plaintext.clone();
         let fx = fixture(vec![issued, deny]);
 
@@ -1558,8 +1565,8 @@ mod tests {
                 out_file: Some(all.clone()),
             },
         )
-        .expect("导出");
-        let text = std::fs::read_to_string(&all).expect("读回");
+        .expect("export");
+        let text = std::fs::read_to_string(&all).expect("read back");
         assert!(
             text.contains(&format!("OPENAI_CREDENTIAL={SENTINEL}")),
             "{text}"
@@ -1569,7 +1576,7 @@ mod tests {
             "{text}"
         );
 
-        // 作用域令牌：只能拿到被授权的条目。
+        // A scoped token: it only gets the entries it is authorized for.
         let scoped = fx.dir.path().join("scoped.env");
         export(
             &ctx_with(&fx.home, &["--yes", "--token", &plaintext]),
@@ -1578,17 +1585,17 @@ mod tests {
                 out_file: Some(scoped.clone()),
             },
         )
-        .expect("导出");
-        let text = std::fs::read_to_string(&scoped).expect("读回");
+        .expect("export");
+        let text = std::fs::read_to_string(&scoped).expect("read back");
         assert!(text.contains("OTHER_PASSWORD"), "{text}");
-        assert!(!text.contains("OPENAI"), "作用域外的条目不得导出：{text}");
+        assert!(!text.contains("OPENAI"), "entries outside the scope must not be exported: {text}");
         assert!(!text.contains(SENTINEL), "{text}");
 
-        let export_audit = std::fs::read_to_string(&fx.store.paths.audit).expect("审计");
+        let export_audit = std::fs::read_to_string(&fx.store.paths.audit).expect("audit");
         assert!(export_audit.contains("\"export\""), "{export_audit}");
         assert!(!export_audit.contains(SENTINEL), "{export_audit}");
 
-        // `--deny-reveal` 令牌：整库明文出库必须被拒，且不落盘。
+        // A `--deny-reveal` token: a whole-vault plaintext dump must be refused, and nothing written to disk.
         let denied = fx.dir.path().join("denied.env");
         let err = export(
             &ctx_with(&fx.home, &["--yes", "--token", &deny_plaintext]),
@@ -1597,13 +1604,13 @@ mod tests {
                 out_file: Some(denied.clone()),
             },
         )
-        .expect_err("deny_reveal 令牌不得导出明文");
+        .expect_err("a deny_reveal token must not export plaintext");
         assert_eq!(err.exit_code(), 7, "{err}");
         assert!(matches!(err, Error::Denied(_)), "{err:?}");
-        assert!(!denied.exists(), "被拒时不得落盘");
+        assert!(!denied.exists(), "nothing may be written to disk when denied");
     }
 
-    // ---- run：令牌作用域（本次修补的回归点） ------------------------------
+    // ---- run: token scope (regression of this fix) --------
 
     #[test]
     fn a_scoped_token_cannot_inject_an_unauthorized_entry() {
@@ -1612,7 +1619,7 @@ mod tests {
         let fx = fixture(vec![issued]);
         let ctx = ctx_with(&fx.home, &["--token", &plaintext]);
 
-        // 三种写法都不能绕过：引用、`VAR=ITEM`、裸 `ITEM`。
+        // None of the three forms may bypass it: a reference, `VAR=ITEM`, or a bare `ITEM`.
         for spec in ["X=akey://openai/credential", "X=openai", "openai"] {
             let marker = fx.dir.path().join("leaked.txt");
             let args = RunArgs {
@@ -1622,12 +1629,12 @@ mod tests {
                 no_masking: false,
                 command: sh_write(&marker, "X"),
             };
-            let err = run(&ctx, &args).expect_err("受限令牌不得注入作用域外的条目");
+            let err = run(&ctx, &args).expect_err("a restricted token must not inject entries outside its scope");
             assert_eq!(err.exit_code(), 8, "spec '{spec}': {err}");
             assert!(matches!(err, Error::TokenScope(_)), "spec '{spec}': {err:?}");
             assert!(
                 !marker.exists(),
-                "spec '{spec}': 授权失败时子进程不得运行，更不得写出明文"
+                "spec '{spec}': when authorization fails the child must not run, let alone write out plaintext"
             );
         }
     }
@@ -1640,7 +1647,7 @@ mod tests {
         let ctx = ctx_with(&fx.home, &["--token", &plaintext]);
 
         let env_file = fx.dir.path().join("scope.env");
-        std::fs::write(&env_file, "X=akey://openai/credential\n").expect("写 env 文件");
+        std::fs::write(&env_file, "X=akey://openai/credential\n").expect("write the env file");
         let marker = fx.dir.path().join("leaked.txt");
         let args = RunArgs {
             with: Vec::new(),
@@ -1649,7 +1656,7 @@ mod tests {
             no_masking: false,
             command: sh_write(&marker, "X"),
         };
-        let err = run(&ctx, &args).expect_err("env-file 里的引用同样受作用域限制");
+        let err = run(&ctx, &args).expect_err("a reference in an env file is subject to the scope just the same");
         assert_eq!(err.exit_code(), 8, "{err}");
         assert!(!marker.exists());
     }
@@ -1669,9 +1676,9 @@ mod tests {
             no_masking: false,
             command: sh_write(&marker, "X"),
         };
-        run(&ctx, &args).expect("作用域内的条目应可注入");
+        run(&ctx, &args).expect("entries inside the scope should be injectable");
         assert_eq!(
-            std::fs::read_to_string(&marker).expect("读回子进程输出"),
+            std::fs::read_to_string(&marker).expect("read back the child's output"),
             OTHER_SENTINEL
         );
     }
@@ -1692,15 +1699,15 @@ mod tests {
             out_file: Some(out.clone()),
         };
 
-        std::fs::write(&template, "key=akey://openai/credential\n").expect("写模板");
-        let err = inject(&ctx, &args).expect_err("受限令牌不得渲染作用域外的条目");
+        std::fs::write(&template, "key=akey://openai/credential\n").expect("write the template");
+        let err = inject(&ctx, &args).expect_err("a restricted token must not render entries outside its scope");
         assert_eq!(err.exit_code(), 8, "{err}");
-        assert!(!out.exists(), "授权失败时不得落盘");
+        assert!(!out.exists(), "nothing may be written to disk when authorization fails");
 
-        std::fs::write(&template, "key=akey://other/password\n").expect("写模板");
-        inject(&ctx, &args).expect("作用域内的引用应可渲染");
+        std::fs::write(&template, "key=akey://other/password\n").expect("write the template");
+        inject(&ctx, &args).expect("references inside the scope should render");
         assert_eq!(
-            std::fs::read_to_string(&out).expect("读回"),
+            std::fs::read_to_string(&out).expect("read back"),
             format!("key={OTHER_SENTINEL}\n")
         );
     }
@@ -1713,7 +1720,7 @@ mod tests {
         let ctx = ctx_with(&fx.home, &[]);
         let payload: &[u8] = b"\x00kubeconfig\xff binary payload";
         let blob = fx.dir.path().join("kubeconfig");
-        std::fs::write(&blob, payload).expect("写附件");
+        std::fs::write(&blob, payload).expect("write the attachment");
 
         doc(
             &ctx,
@@ -1738,9 +1745,9 @@ mod tests {
             },
         )
         .expect("get");
-        assert_eq!(std::fs::read(&back).expect("读回"), payload, "必须逐字节还原");
+        assert_eq!(std::fs::read(&back).expect("read back"), payload, "must round-trip byte for byte");
 
-        // 非 file 字段该走 `read`，而不是 doc
+        // A non-file field should go through `read`, not doc
         let err = doc(
             &ctx,
             &DocArgs {
@@ -1750,7 +1757,7 @@ mod tests {
                 },
             },
         )
-        .expect_err("非 file 字段");
+        .expect_err("not a file field");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("akey read"), "{err}");
     }
@@ -1763,7 +1770,7 @@ mod tests {
         let ctx = ctx_with(&fx.home, &["--token", &plaintext]);
 
         let blob = fx.dir.path().join("blob");
-        std::fs::write(&blob, b"data").expect("写文件");
+        std::fs::write(&blob, b"data").expect("write the file");
         let err = doc(
             &ctx,
             &DocArgs {
@@ -1774,12 +1781,12 @@ mod tests {
                 },
             },
         )
-        .expect_err("令牌是只读凭据");
+        .expect_err("tokens are read-only credentials");
         assert_eq!(err.exit_code(), 7);
         assert!(matches!(err, Error::Denied(_)), "{err:?}");
 
         let env_file = fx.dir.path().join("in.env");
-        std::fs::write(&env_file, "KEY=value\n").expect("写 env 文件");
+        std::fs::write(&env_file, "KEY=value\n").expect("write the env file");
         let err = import(
             &ctx,
             &ImportArgs {
@@ -1788,7 +1795,7 @@ mod tests {
                 merge: false,
             },
         )
-        .expect_err("令牌是只读凭据");
+        .expect_err("tokens are read-only credentials");
         assert_eq!(err.exit_code(), 7);
     }
 
@@ -1796,23 +1803,23 @@ mod tests {
     fn attachment_decoding_round_trips_and_rejects_junk() {
         let payload: &[u8] = b"\x00\xff\xfe binary";
         assert_eq!(
-            decode_attachment(&STANDARD.encode(payload)).expect("解码"),
+            decode_attachment(&STANDARD.encode(payload)).expect("decode"),
             payload
         );
 
-        // URL-safe 变体也认（两种编码在含 `+` / `/` 的字节上不同）
+        // The URL-safe variant is accepted too (the two encodings differ on bytes containing `+` / `/`)
         let tricky: &[u8] = &[0xfb, 0xff, 0xfe, 0xfa, 0xff];
         assert_eq!(
-            decode_attachment(&URL_SAFE_NO_PAD.encode(tricky)).expect("解码"),
+            decode_attachment(&URL_SAFE_NO_PAD.encode(tricky)).expect("decode"),
             tricky
         );
 
-        let err = decode_attachment("not base64!!").expect_err("非法 base64");
+        let err = decode_attachment("not base64!!").expect_err("invalid base64");
         assert_eq!(err.exit_code(), 1);
         assert!(matches!(err, Error::Corrupt(_)), "{err:?}");
         assert!(
             !err.to_string().contains("not base64!!"),
-            "错误信息不得回显字段值：{err}"
+            "the error message must not echo field values: {err}"
         );
     }
 
@@ -1823,7 +1830,7 @@ mod tests {
         let fx = fixture(Vec::new());
 
         let err = plan_import(&fx.vault, vec![entry_with("openai", &[("credential", "v")])], false)
-            .expect_err("重名且没有 --merge");
+            .expect_err("a duplicate name and no --merge");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("--merge"), "{err}");
 
@@ -1835,7 +1842,7 @@ mod tests {
             )],
             true,
         )
-        .expect("合并计划");
+        .expect("the merge plan");
         assert_eq!(plan.merges.len(), 1);
         assert!(plan.creates.is_empty());
 
@@ -1851,7 +1858,7 @@ mod tests {
             (0, 1, 1, 1)
         );
         let openai = vault.find("openai").expect("openai");
-        assert_eq!(openai.id, ulid(1), "合并必须保留原 ID");
+        assert_eq!(openai.id, ulid(1), "a merge must keep the original ID");
         assert_eq!(
             openai.field("credential").expect("credential").value(),
             "new-value"
@@ -1860,24 +1867,24 @@ mod tests {
         assert_eq!(
             openai.reveal,
             Reveal::Allow,
-            "本地策略不该被导入文件覆盖"
+            "local policy must not be overridden by an import file"
         );
 
-        // 新名字 → 创建；同名两次 → usage
+        // A new name → create; the same name twice → usage
         let plan = plan_import(&fx.vault, vec![entry_with("fresh", &[("credential", "v")])], false)
-            .expect("创建计划");
+            .expect("the create plan");
         assert_eq!(plan.creates.len(), 1);
 
         let twice = vec![
             entry_with("dup", &[("a", "1")]),
             entry_with("dup", &[("a", "2")]),
         ];
-        let err = plan_import(&fx.vault, twice, true).expect_err("同一文件里重复名字");
+        let err = plan_import(&fx.vault, twice, true).expect_err("a duplicate name within one file");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("twice"), "{err}");
 
         let err = plan_import(&fx.vault, vec![entry_with("Bad Name", &[("a", "1")])], false)
-            .expect_err("非法条目名");
+            .expect_err("an invalid entry name");
         assert_eq!(err.exit_code(), 2);
     }
 
@@ -1885,7 +1892,7 @@ mod tests {
     fn import_creates_entries_from_a_file_and_is_repeatable_with_merge() {
         let fx = fixture(Vec::new());
         let env_file = fx.dir.path().join("prod.env");
-        std::fs::write(&env_file, "AWS_KEY=abc123\n").expect("写 env 文件");
+        std::fs::write(&env_file, "AWS_KEY=abc123\n").expect("write the env file");
         let ctx = ctx_with(&fx.home, &[]);
 
         let args = |merge: bool| ImportArgs {
@@ -1893,9 +1900,9 @@ mod tests {
             in_file: Some(env_file.clone()),
             merge,
         };
-        import(&ctx, &args(false)).expect("导入");
+        import(&ctx, &args(false)).expect("import");
 
-        let vault = fx.store.load().expect("重新载入");
+        let vault = fx.store.load().expect("reload");
         let entry = vault.find("prod").expect("prod");
         assert_eq!(entry.category, Category::EnvBundle);
         assert_eq!(
@@ -1903,18 +1910,18 @@ mod tests {
             "abc123"
         );
 
-        let err = import(&ctx, &args(false)).expect_err("重名且没有 --merge");
+        let err = import(&ctx, &args(false)).expect_err("a duplicate name and no --merge");
         assert_eq!(err.exit_code(), 2);
 
-        std::fs::write(&env_file, "AWS_KEY=rotated\n").expect("改 env 文件");
-        import(&ctx, &args(true)).expect("--merge 应可重复导入");
-        let vault = fx.store.load().expect("重新载入");
+        std::fs::write(&env_file, "AWS_KEY=rotated\n").expect("rewrite the env file");
+        import(&ctx, &args(true)).expect("--merge should make the import repeatable");
+        let vault = fx.store.load().expect("reload");
         assert_eq!(
             vault.find("prod").expect("prod").field("aws_key").expect("aws_key").value(),
             "rotated"
         );
 
-        let log = std::fs::read_to_string(&fx.store.paths.audit).expect("审计");
+        let log = std::fs::read_to_string(&fx.store.paths.audit).expect("audit");
         assert!(!log.contains("abc123") && !log.contains("rotated"), "{log}");
     }
 
@@ -1926,13 +1933,13 @@ mod tests {
             ".env",
             "export AWS_KEY=abc123\nDB_URL=\"postgres://u:p@h/db\"\n",
         )
-        .expect("解析 dotenv");
+        .expect("parse dotenv");
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0].name, "prod");
         assert_eq!(imported[0].category, Category::EnvBundle);
-        assert_eq!(imported[0].fields.len(), 2, "重复/空变量都要处理干净");
+        assert_eq!(imported[0].fields.len(), 2, "duplicate and empty variables must both be handled cleanly");
 
-        // 导入 → 注入：变量名必须与 `.env` 里写的一模一样。
+        // import → inject: the variable names must match exactly what the `.env` file said.
         let mut vault = Vault::default();
         vault.entries.insert(imported[0].id, imported[0].clone());
         let injection = inject::resolve(
@@ -1942,7 +1949,7 @@ mod tests {
             &["prod".to_string()],
             &[],
         )
-        .expect("bundle 注入");
+        .expect("bundle injection");
         let vars: BTreeMap<&str, &str> = injection
             .vars
             .iter()
@@ -1951,8 +1958,8 @@ mod tests {
         assert_eq!(vars["AWS_KEY"], "abc123");
         assert_eq!(vars["DB_URL"], "postgres://u:p@h/db");
 
-        // 空文件 → usage，而不是建一条空条目
-        let err = parse_import_dotenv("prod", ".env", "# 只有注释\n").expect_err("没有变量");
+        // An empty file → usage, rather than creating an empty entry
+        let err = parse_import_dotenv("prod", ".env", "# comment only\n").expect_err("no variables");
         assert_eq!(err.exit_code(), 2);
 
         assert_eq!(import_entry_name(Some(Path::new("/tmp/prod.env"))), "prod");
@@ -1963,8 +1970,8 @@ mod tests {
     #[test]
     fn import_json_accepts_our_own_export_and_hand_written_lists() {
         let fx = fixture(Vec::new());
-        let text = render_export(&fx.vault, ExportFormat::Json, None).expect("导出");
-        let entries = parse_import(ExportFormat::Json, "backup.json", &text).expect("解析");
+        let text = render_export(&fx.vault, ExportFormat::Json, None).expect("export");
+        let entries = parse_import(ExportFormat::Json, "backup.json", &text).expect("parse");
         assert_eq!(entries.len(), 2);
         let openai = entries.iter().find(|e| e.name == "openai").expect("openai");
         assert_eq!(
@@ -1972,14 +1979,14 @@ mod tests {
             SENTINEL
         );
 
-        // 手写列表：省略 id / 时间戳时补默认值，而不是拒绝
+        // A hand-written list: fill in defaults for an omitted id / timestamps rather than rejecting it
         let bare = r#"[{"name":"solo","category":"apikey","fields":[{"id":"credential","label":"credential","type":"concealed","value":"v"}]}]"#;
-        let entries = parse_import(ExportFormat::Json, "bare.json", bare).expect("解析");
+        let entries = parse_import(ExportFormat::Json, "bare.json", bare).expect("parse");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "solo");
         assert_eq!(entries[0].field("credential").expect("credential").value(), "v");
 
-        let err = parse_import(ExportFormat::Json, "x.json", "{\"hello\":1}").expect_err("认不出来");
+        let err = parse_import(ExportFormat::Json, "x.json", "{\"hello\":1}").expect_err("not recognizable");
         assert_eq!(err.exit_code(), 2);
         assert!(err.to_string().contains("list of entries"), "{err}");
     }
@@ -1987,16 +1994,16 @@ mod tests {
     #[test]
     fn import_csv1p_round_trips_our_own_export() {
         let fx = fixture(Vec::new());
-        let text = render_export(&fx.vault, ExportFormat::Csv1p, None).expect("导出");
+        let text = render_export(&fx.vault, ExportFormat::Csv1p, None).expect("export");
         assert!(text.starts_with("Title,Username,Password,URL,Notes\n"), "{text}");
-        assert!(text.contains("\"Other, Inc.\""), "含逗号的标题要加引号：{text}");
+        assert!(text.contains("\"Other, Inc.\""), "a title containing a comma needs quotes: {text}");
 
-        let entries = parse_import(ExportFormat::Csv1p, "1p.csv", &text).expect("解析");
+        let entries = parse_import(ExportFormat::Csv1p, "1p.csv", &text).expect("parse");
         let other = entries
             .iter()
             .find(|e| e.title.as_deref() == Some("Other, Inc."))
-            .expect("other 条目");
-        assert!(is_valid_name(&other.name), "派生名必须合法：{}", other.name);
+            .expect("the other entry");
+        assert!(is_valid_name(&other.name), "the derived name must be valid: {}", other.name);
         assert_eq!(
             other.field("username").expect("username").value(),
             "me@example.com"
@@ -2008,7 +2015,7 @@ mod tests {
         assert_eq!(other.url.as_deref(), Some("https://example.com/login"));
 
         let err = parse_import(ExportFormat::Csv1p, "x.csv", "Name,Password\nfoo,bar\n")
-            .expect_err("缺 Title 列");
+            .expect_err("a missing Title column");
         assert_eq!(err.exit_code(), 2);
     }
 
@@ -2033,9 +2040,9 @@ mod tests {
             "QUOTED_CREDENTIAL=\"has space and \\\"quotes\\\"\"\nQUOTED_PLAIN=plain-value\n"
         );
 
-        // 导出 ↔ dotenv 解析必须互逆，否则导出文件喂不回 `run --env-file`。
+        // export <-> dotenv parsing must be inverses, or an exported file cannot be fed back to `run --env-file`.
         let values: BTreeMap<String, String> = inject::parse_dotenv("exported", &text)
-            .expect("解析导出的 dotenv")
+            .expect("parse the exported dotenv")
             .into_iter()
             .collect();
         assert_eq!(values["QUOTED_CREDENTIAL"], "has space and \"quotes\"");
@@ -2053,7 +2060,7 @@ mod tests {
             Some(vault),
             &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}),
         )
-        .expect("initialize 必须回复");
+        .expect("initialize must reply");
         assert_eq!(init["jsonrpc"], "2.0");
         assert_eq!(init["id"], 1);
         assert_eq!(init["result"]["protocolVersion"], "2024-11-05");
@@ -2061,29 +2068,29 @@ mod tests {
         assert_eq!(init["result"]["serverInfo"]["name"], "akey");
         assert!(init["result"]["serverInfo"]["version"].is_string());
 
-        // 客户端没给版本 → 回默认值，而不是崩
+        // The client gave no version → fall back to the default rather than crashing
         let init = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":2,"method":"initialize"}))
-            .expect("initialize 必须回复");
+            .expect("initialize must reply");
         assert!(init["result"]["protocolVersion"].is_string());
         assert!(init["result"]["capabilities"]["tools"].is_object());
 
-        // 通知不回复
+        // Notifications get no reply
         assert!(
             handle_message(
                 Some(vault),
                 &json!({"jsonrpc":"2.0","method":"notifications/initialized"})
             )
             .is_none(),
-            "通知不得回复"
+            "a notification must get no reply"
         );
 
         let pong = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":3,"method":"ping"}))
-            .expect("ping 必须回复");
+            .expect("ping must reply");
         assert!(pong["result"].is_object());
 
         let tools = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}))
-            .expect("tools/list 必须回复");
-        let listed = tools["result"]["tools"].as_array().expect("工具数组");
+            .expect("tools/list must reply");
+        let listed = tools["result"]["tools"].as_array().expect("tool array");
         let names: Vec<&str> = listed.iter().filter_map(|t| t["name"].as_str()).collect();
         assert_eq!(names, vec!["akey_list", "akey_get"]);
         for tool in listed {
@@ -2091,23 +2098,23 @@ mod tests {
             assert!(tool["description"].is_string(), "{tool}");
         }
 
-        // 未解锁的机器上，不需要金库的方法同样要能应答
+        // On a locked machine the methods that do not need a vault must answer just the same
         let init = handle_message(None, &json!({"jsonrpc":"2.0","id":5,"method":"initialize"}))
-            .expect("initialize 与金库无关");
+            .expect("initialize does not involve the vault");
         assert!(init["result"]["serverInfo"].is_object());
         let listed = handle_message(None, &json!({"jsonrpc":"2.0","id":6,"method":"tools/list"}))
-            .expect("tools/list 与金库无关");
+            .expect("tools/list does not involve the vault");
         assert!(listed["result"]["tools"].is_array());
 
-        // 未知方法 → -32601；非对象请求 → -32600
+        // Unknown method → -32601; non-object request → -32600
         let err = handle_message(Some(vault), &json!({"jsonrpc":"2.0","id":7,"method":"tools/whatever"}))
-            .expect("必须回复错误");
+            .expect("must reply with an error");
         assert_eq!(err["error"]["code"], -32601);
-        let err = handle_message(Some(vault), &json!("nope")).expect("必须回复错误");
+        let err = handle_message(Some(vault), &json!("nope")).expect("must reply with an error");
         assert_eq!(err["error"]["code"], -32600);
     }
 
-    /// FR-16 的安全底线：这条通路在任何情况下都不得吐出字段值。
+    /// The FR-16 security floor: this channel must not emit field values under any circumstances.
     #[test]
     fn mcp_tools_never_return_field_values() {
         let fx = fixture(Vec::new());
@@ -2122,33 +2129,33 @@ mod tests {
             json!({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"akey_get","arguments":{"item":"nope"}}}),
         ];
         for call in calls {
-            let response = handle_message(Some(vault), &call).expect("必须回复");
+            let response = handle_message(Some(vault), &call).expect("must reply");
             let text = response.to_string();
             for leaked in [
                 SENTINEL,
                 OTHER_SENTINEL,
                 "me@example.com",
-                // `url` 也可能夹带秘密（查询串里的 token），同样不暴露
+                // `url` can carry secrets too (a token in a query string), so it is not exposed either
                 "platform.openai.com",
                 "example.com/login",
             ] {
-                assert!(!text.contains(leaked), "MCP 泄漏了 {leaked}：{text}");
+                assert!(!text.contains(leaked), "MCP leaked {leaked}: {text}");
             }
             assert!(
                 response["result"]["content"][0]["text"].is_string(),
-                "content[].text 必须是字符串：{response}"
+                "content[].text must be a string: {response}"
             );
         }
 
-        // 但标签、类型与引用必须在——agent 正是靠它去 `akey run`
+        // But labels, types and references must be there — that is exactly what an agent uses to run `akey run`
         let get = handle_message(
             Some(vault),
             &json!({"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"akey_get","arguments":{"item":"openai"}}}),
         )
-        .expect("必须回复");
+        .expect("must reply");
         let payload: Value =
-            serde_json::from_str(get["result"]["content"][0]["text"].as_str().expect("文本"))
-                .expect("正文是 JSON");
+            serde_json::from_str(get["result"]["content"][0]["text"].as_str().expect("the text"))
+                .expect("the body is JSON");
         assert_eq!(payload["entry"]["name"], "openai");
         assert_eq!(payload["entry"]["category"], "apikey");
         assert_eq!(payload["fields"][0]["label"], "credential");
@@ -2160,38 +2167,38 @@ mod tests {
         );
         assert!(
             payload["fields"][0].get("value").is_none(),
-            "字段载荷里不该有 value：{payload}"
+            "the field payload must not contain a value: {payload}"
         );
 
-        // 条目不存在 → 工具级错误（isError），不是 JSON-RPC 错误
+        // A missing entry → a tool-level error (isError), not a JSON-RPC error
         let missing = handle_message(
             Some(vault),
             &json!({"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"akey_get","arguments":{"item":"nope"}}}),
         )
-        .expect("必须回复");
+        .expect("must reply");
         assert_eq!(missing["result"]["isError"], true);
 
-        // 缺参数 / 未知工具 → -32602；金库不可用 → -32000
+        // Missing params / unknown tool → -32602; vault unavailable → -32000
         let err = handle_message(
             Some(vault),
             &json!({"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"akey_get","arguments":{}}}),
         )
-        .expect("必须回复");
+        .expect("must reply");
         assert_eq!(err["error"]["code"], -32602);
         let err = handle_message(
             Some(vault),
             &json!({"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"akey_delete"}}),
         )
-        .expect("必须回复");
+        .expect("must reply");
         assert_eq!(err["error"]["code"], -32602);
         let err = handle_message(
             None,
             &json!({"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"akey_list"}}),
         )
-        .expect("必须回复");
+        .expect("must reply");
         assert_eq!(err["error"]["code"], -32000);
 
-        // 通知形式的工具调用不回复
+        // A tool call in notification form gets no reply
         assert!(
             handle_message(
                 Some(vault),

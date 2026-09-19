@@ -296,6 +296,9 @@ akey doc get akey://k8s-prod/kubeconfig -o ./kubeconfig
 
 # 从别的库迁进来（重名会被挡下，--merge 才覆盖同名字段）
 akey import --as json -i dump.json --merge
+
+# 批准一台新设备（在**每台既有机器**上各跑一次，它才能读到那台机器写的内容）
+akey devices trust laptop
 ```
 
 赋值语句的写法是 `[<section>.]<字段>[[<类型>]]=<值>`，例如 `akey set api 'creds.token[concealed]=abc'`。
@@ -411,7 +414,7 @@ akey sync --json
 ## 12. 你不该拿它当边界的几件事
 
 - **掩蔽是护栏，不是沙箱。** `akey run` 挡的是子进程**误回显**。一个存心外泄的子进程本来就握着值：它base64 一下、拆到 stdout/stderr 两边、或写个 socket 都行。不要把 `akey run` 当成对抗恶意代码的机密性边界。
-- **远端决定谁能读。** `recipients.json` 由 git 远端分发。你控制本机、但别人能写那个远端时，他可以加一把公钥，下一次合法写入就会把整库重新加密给他。在这一点被加固之前，**请把金库远端当成高价值凭据**。细节见 `docs/SECURITY.zh-CN.md` §5。
+- **远端决定不了谁能读。** `recipients.json` 由 git 远端分发，所以被塞进去的公钥只会被**列出来**，永远不会被加密到——加密只给本机在本地批准过的公钥。因此从别处加入的设备，需要在**每台既有机器**上由人跑一次 `akey devices trust <名字>`，才能读到那台机器写的内容。未批准的公钥由 `akey sync` 与 `akey doctor` 报为 pending。细节见 `docs/SECURITY.zh-CN.md` §5。
 - **令牌是策略检查，不是独立身份。** 能在这台机器上跑 `akey` 的人就能读 `identity.key`。令牌的作用是限制**某个 agent 的日常命令**能碰什么，不是密码学边界。
 - **TOTP 动态码本来就该显示。** `akey://…?attribute=otp` 返回的是 6 位码，不是种子；种子与其它秘密一样默认隐藏。
 

@@ -1,4 +1,5 @@
-//! 生命周期命令：初始化、设备、恢复密码、能力令牌、自检、审计、schema、补全。
+//! Lifecycle commands: init, devices, recovery passphrase, capability tokens, self-check,
+//! audit, schema, completion.
 
 use std::fs;
 use std::io::{IsTerminal, Read};
@@ -26,16 +27,18 @@ use crate::vault::store::{
     Store, AGENTS_FILE, RECIPIENTS_FILE, RECOVERY_FILE, SYNCED_FILES, VAULT_FILE,
 };
 
-/// 恢复密码的最短长度。它是整库的最终后路，别让它成为最弱环节。
+/// Minimum recovery-passphrase length. It is the vault's last resort, so do not let it
+/// become the weakest link.
 pub const MIN_PASSPHRASE_LEN: usize = 12;
 
 const GITIGNORE: &str = ".DS_Store\n.akey-tmp-*\n";
 
-/// `recovery.age` 解密后的内容。
+/// The decrypted contents of `recovery.age`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RecoveryFile {
     version: u32,
-    /// 引导身份的私钥。它始终是金库收件人之一，所以这个文件永不过期。
+    /// The bootstrap identity's private key. It is always one of the vault's recipients, so
+    /// this file never expires.
     bootstrap_identity: String,
     created_at: DateTime<Utc>,
 }
@@ -43,6 +46,15 @@ struct RecoveryFile {
 fn default_device_name() -> String {
     if let Ok(name) = std::env::var("AKEY_DEVICE_NAME")
         && !name.trim().is_empty()
+    {
+        return name.trim().to_string();
+    }
+    // Prefer the environment: it costs no process spawn, and Windows names the machine in
+    // `COMPUTERNAME` while unix shells export `HOSTNAME`.
+    if let Some(name) = ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok())
+        .filter(|name| !name.trim().is_empty())
     {
         return name.trim().to_string();
     }
@@ -54,11 +66,14 @@ fn default_device_name() -> String {
         .unwrap_or_else(|| "device".to_string())
 }
 
-/// 取恢复密码。顺序：`AKEY_RECOVERY_PASSPHRASE` 环境变量 → 非 TTY 时读 stdin → TTY 时提示。
+/// Obtain the recovery passphrase. Order: the `AKEY_RECOVERY_PASSPHRASE` environment
+/// variable → read stdin when not a TTY → prompt when a TTY.
 ///
-/// 非交互场景永远不阻塞：没有 TTY 又没有环境变量时，stdin 读完即失败，而不是挂在提示上。
+/// A non-interactive run never blocks: with no TTY and no environment variable, reading
+/// stdin to EOF fails instead of hanging on a prompt.
 ///
-/// `confirm = true` 表示**这是要新建的密码**，此时无论来源都必须满足长度下限。
+/// `confirm = true` means **this passphrase is being newly created**, in which case the
+/// minimum length applies no matter where it came from.
 fn read_passphrase(confirm: bool) -> Result<SecretString> {
     if let Ok(value) = std::env::var("AKEY_RECOVERY_PASSPHRASE")
         && !value.is_empty()
@@ -88,10 +103,11 @@ fn read_passphrase(confirm: bool) -> Result<SecretString> {
     enforce_min(SecretString::from(first), confirm)
 }
 
-/// 只在**新建**密码时卡长度。
+/// Enforce the length limit only for a **new** passphrase.
 ///
-/// 反过来（对已有密码也卡长度）会让收紧策略变成自杀：老金库的密码一旦短于新下限，
-/// 就再也 unlock / rotate / 引导不了，而它本该还能用。
+/// The other way round (enforcing it on existing passphrases too) would make tightening the
+/// policy suicidal: once an old vault's passphrase is shorter than the new minimum, it could
+/// no longer be unlocked / rotated / bootstrapped, when it should still work.
 fn enforce_min(passphrase: SecretString, is_new: bool) -> Result<SecretString> {
     if is_new && passphrase.expose_secret().len() < MIN_PASSPHRASE_LEN {
         return Err(Error::usage(format!(
@@ -101,8 +117,9 @@ fn enforce_min(passphrase: SecretString, is_new: bool) -> Result<SecretString> {
     Ok(passphrase)
 }
 
-/// 取**新**的恢复密码。允许用 `AKEY_NEW_RECOVERY_PASSPHRASE` 与旧密码分开提供——
-/// 否则非交互场景下 rotate 只能读到同一个值。
+/// Obtain the **new** recovery passphrase. `AKEY_NEW_RECOVERY_PASSPHRASE` lets it be given
+/// separately from the old one — otherwise a non-interactive rotate could only read the same
+/// value twice.
 fn read_new_passphrase() -> Result<SecretString> {
     if let Ok(value) = std::env::var("AKEY_NEW_RECOVERY_PASSPHRASE")
         && !value.is_empty()
@@ -181,6 +198,9 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
         repo: repo.clone(),
         remote: args.remote.clone(),
         device_name: device_name.clone(),
+        // This device is the first member of the trust set.
+        trusted: std::collections::BTreeMap::from([(identity.pubkey(), now)]),
+        trust_seeded: true,
         created_at: now,
     };
     config.save(&ctx.paths)?;
@@ -303,6 +323,17 @@ fn init_from_remote(
         repo: repo.clone(),
         remote: Some(url.to_string()),
         device_name: device_name.clone(),
+        // Bootstrap approves the devices **already in the vault at that moment**: they are
+        // exactly the set that can open the vault this device just joined, and the operator
+        // handing over the recovery passphrase is the trust anchor. Public keys appearing
+        // later are not automatically trusted.
+        trusted: recipients
+            .recipients
+            .iter()
+            .filter(|(_, record)| record.is_active())
+            .map(|(key, _)| (key.clone(), now))
+            .collect(),
+        trust_seeded: true,
         created_at: now,
     };
     config.save(&ctx.paths)?;
@@ -330,7 +361,7 @@ fn init_from_remote(
     )
 }
 
-/// 只为了在建 config 之前拿到 Git 封装；不落盘。
+/// Only to get a Git handle before the config exists; nothing is written to disk.
 fn git_for_repo(repo: &std::path::Path, device_name: &str) -> Git {
     Git::new(
         repo,
@@ -346,7 +377,7 @@ fn internal(e: serde_json::Error) -> Error {
 // ---------------------------------------------------------------- devices
 
 pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
-    let store = ctx.store()?;
+    let mut store = ctx.store()?;
     match &args.command {
         DevicesCommand::List => {
             let recipients = store.load_recipients()?;
@@ -391,7 +422,8 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
         }
 
         DevicesCommand::Add { name } => {
-            // 令牌是只读凭据：改组收件人等于改密码学边界，必须用本机身份。
+            // A token is a read-only credential: changing the recipient set changes the
+            // cryptographic boundary, so it must use the local device identity.
             ctx.gate_write()?;
             let name = name.clone().unwrap_or_else(|| store.config.device_name.clone());
             if ctx.dry_run {
@@ -401,6 +433,9 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 );
             }
             let now = Utc::now();
+            // This device must be in the trust set, otherwise the save_with below refuses
+            // to write.
+            store.trust(&[store.identity.pubkey()], now)?;
             store.with_lock(|store| {
                 let mut recipients = store.load_recipients()?;
                 recipients.add(&store.identity.pubkey(), &name, RecipientKind::Device, now);
@@ -413,8 +448,8 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             git.commit(&format!("akey: re-add device {name}"))?;
             audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
             ctx.out.emit(
-                format!("device '{name}' is now an active recipient"),
-                &serde_json::json!({ "name": name, "pubkey": store.identity.pubkey() }),
+                format!("device '{name}' is now an active, trusted recipient"),
+                &serde_json::json!({ "name": name, "pubkey": store.identity.pubkey(), "trusted": true }),
             )
         }
 
@@ -433,14 +468,25 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 );
             }
             let now = Utc::now();
+            // Withdraw approval first, then re-encrypt: revoke is only a marker in the
+            // ledger, while withdrawing approval is what actually keeps it from getting
+            // ciphertext.
+            let doomed = store
+                .load_recipients()?
+                .find_by_name(name)
+                .map(|(key, _)| key.clone());
             store.with_lock(|store| {
                 let mut recipients = store.load_recipients()?;
                 recipients.revoke(name, now)?;
                 recipients.save(&store.recipients_path())?;
                 let vault = store.load()?;
-                // 关键一步：重新加密，被吊销的设备从此刻起再也解不开新版本。
+                // The key step: re-encrypt, so from this moment on the revoked device can
+                // never open a new revision again.
                 store.save_with(&vault, &recipients)
             })?;
+            if let Some(key) = doomed {
+                store.untrust(&key)?;
+            }
             let git = git_for(&store);
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: revoke device {name}"))?;
@@ -479,7 +525,93 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 &serde_json::json!({ "old": old, "new": new }),
             )
         }
+
+        // Approve a recipient and **immediately** encrypt the current vault to it —
+        // otherwise it gets no content until the next write.
+        DevicesCommand::Trust { key } => {
+            ctx.gate_write()?;
+            let recipients = store.load_recipients()?;
+            let (pubkey, name) = resolve_recipient(&recipients, key)?;
+            if !recipients
+                .recipients
+                .get(&pubkey)
+                .is_some_and(|record| record.is_active())
+            {
+                return Err(Error::usage(format!(
+                    "'{name}' is revoked; re-add it with `akey devices add` before trusting it"
+                )));
+            }
+            if ctx.dry_run {
+                return ctx.out.emit(
+                    format!("dry run: would trust '{name}' and re-encrypt the vault to it"),
+                    &serde_json::json!({ "action": "devices trust", "name": name, "pubkey": pubkey }),
+                );
+            }
+            let added = store.trust(std::slice::from_ref(&pubkey), Utc::now())? > 0;
+            store.with_lock(|store| {
+                let vault = store.load()?;
+                let recipients = store.load_recipients()?;
+                store.save_with(&vault, &recipients)
+            })?;
+            let git = git_for(&store);
+            git.add_paths(SYNCED_FILES)?;
+            git.commit(&format!("akey: trust device {name}"))?;
+            let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
+            audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
+            ctx.out.emit(
+                format!("'{name}' is trusted and can now decrypt the vault"),
+                &serde_json::json!({ "name": name, "pubkey": pubkey, "newly_trusted": added, "pushed": pushed }),
+            )
+        }
+
+        DevicesCommand::Untrust { key } => {
+            ctx.gate_write()?;
+            let recipients = store.load_recipients()?;
+            let (pubkey, name) = resolve_recipient(&recipients, key)?;
+            if pubkey == store.identity.pubkey() {
+                return Err(Error::usage(
+                    "refusing to untrust this device: it would immediately lock this machine out",
+                ));
+            }
+            if ctx.dry_run {
+                return ctx.out.emit(
+                    format!("dry run: would stop encrypting to '{name}'"),
+                    &serde_json::json!({ "action": "devices untrust", "name": name }),
+                );
+            }
+            let removed = store.untrust(&pubkey)?;
+            store.with_lock(|store| {
+                let vault = store.load()?;
+                let recipients = store.load_recipients()?;
+                store.save_with(&vault, &recipients)
+            })?;
+            let git = git_for(&store);
+            git.add_paths(SYNCED_FILES)?;
+            git.commit(&format!("akey: untrust device {name}"))?;
+            ctx.out.emit(
+                format!(
+                    "'{name}' is no longer trusted; it still appears in recipients.json but will \
+                     not receive new ciphertext"
+                ),
+                &serde_json::json!({ "name": name, "pubkey": pubkey, "was_trusted": removed }),
+            )
+        }
     }
+}
+
+/// Resolve a `devices trust/untrust` argument into `(pubkey, name)`: an `age1…` value is a
+/// public key, anything else is a name.
+fn resolve_recipient(recipients: &Recipients, key: &str) -> Result<(String, String)> {
+    if key.starts_with("age1") {
+        let record = recipients.recipients.get(key).ok_or_else(|| {
+            Error::not_found(format!("no recipient with public key '{key}'"))
+        })?;
+        return Ok((key.to_string(), record.name.clone()));
+    }
+    let (pubkey, record) = recipients
+        .find_by_name(key)
+        .ok_or_else(|| Error::not_found(format!("no recipient named '{key}'")))?;
+    Ok((pubkey.clone(), record.name.clone()))
 }
 
 // ---------------------------------------------------------------- recovery
@@ -487,7 +619,8 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
 pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
     match &args.command {
         RecoveryCommand::Set => {
-            // 令牌若能设恢复密码，就等于给自己留了一把运营者看不见的后门钥匙。
+            // If a token could set the recovery passphrase, it would be leaving itself a
+            // backdoor key the operator cannot see.
             ctx.gate_write()?;
             let passphrase = read_passphrase(true)?;
             set_recovery(ctx, passphrase)?;
@@ -527,10 +660,14 @@ pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
 }
 
 fn set_recovery(ctx: &Ctx, passphrase: SecretString) -> Result<()> {
-    let store = ctx.store()?;
+    let mut store = ctx.store()?;
     let now = Utc::now();
-    // 引导身份每次都是新的；它只是"用密码可以打开的入口"，不承担任何长期角色。
+    // The bootstrap identity is new every time; it is merely "an entrance openable with the
+    // passphrase" and plays no long-term role.
     let bootstrap = DeviceIdentity::generate("bootstrap");
+    // It must be approved before save_with: it is the key to the recovery path, and a
+    // recovery.age that cannot get ciphertext is useless.
+    store.trust(&[bootstrap.pubkey()], now)?;
     let payload = RecoveryFile {
         version: 1,
         bootstrap_identity: bootstrap.secret_string().expose_secret().to_string(),
@@ -539,8 +676,9 @@ fn set_recovery(ctx: &Ctx, passphrase: SecretString) -> Result<()> {
 
     store.with_lock(|store| {
         let mut recipients = store.load_recipients()?;
-        // 旧的引导身份由这次新生成的顶替。留着会积累出多个名为 bootstrap 的收件人，
-        // 而 `devices rm bootstrap` 只能吊销其中一个——那是个说不清的中间态。
+        // The newly generated identity replaces the old bootstrap one. Keeping it would
+        // accumulate several recipients named bootstrap, while `devices rm bootstrap` can
+        // revoke only one of them — an inexplicable in-between state.
         let stale: Vec<String> = recipients
             .recipients
             .iter()
@@ -561,7 +699,8 @@ fn set_recovery(ctx: &Ctx, passphrase: SecretString) -> Result<()> {
         );
         recipients.save(&store.recipients_path())?;
         let vault = store.load()?;
-        // 引导身份必须成为收件人，否则 recovery.age 里的钥匙打不开库。
+        // The bootstrap identity must be a recipient, otherwise the key in recovery.age
+        // cannot open the vault.
         store.save_with(&vault, &recipients)?;
         write_recovery(store, &payload, &passphrase)
     })?;
@@ -578,16 +717,19 @@ fn write_recovery(store: &Store, payload: &RecoveryFile, passphrase: &SecretStri
     paths::atomic_write(&store.recovery_path(), &ciphertext, FILE_MODE)
 }
 
-/// 轮换恢复密码：用旧密码解出引导身份，再用新密码重写 `recovery.age`。
+/// Rotate the recovery passphrase: unlock the bootstrap identity with the old passphrase,
+/// then rewrite `recovery.age` with the new one.
 ///
-/// 抽成纯函数是为了能直接测——`recovery` 命令本身从 env / TTY 取密码，测试不便驱动。
+/// Extracted as a pure function so it can be tested directly — the `recovery` command itself
+/// takes passphrases from env / TTY, which tests cannot easily drive.
 fn rotate_recovery(
     store: &Store,
     current: &SecretString,
     replacement: &SecretString,
 ) -> Result<()> {
     if current.expose_secret() == replacement.expose_secret() {
-        // 非交互场景下两次读取会拿到同一个环境变量，很容易空转一圈还报成功。
+        // Non-interactively, both reads return the same environment variable, so the
+        // command would spin for nothing and still report success.
         return Err(Error::usage(
             "new passphrase is identical to the current one; set \
              AKEY_NEW_RECOVERY_PASSPHRASE to actually rotate",
@@ -622,8 +764,9 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             deny_reveal,
             ttl,
         } => {
-            // 关键：不加这道闸门，一个被限制在单条目上的令牌可以铸出**无限制**令牌，
-            // 再拿它读全库——作用域当场归零。实测可复现。
+            // Key: without this gate, a token restricted to a single entry could mint an
+            // **unrestricted** token and read the whole vault with it — scoping drops to zero
+            // on the spot. Reproduced in practice.
             ctx.gate_write()?;
             if !is_valid_name(name) {
                 return Err(Error::usage(format!("invalid token name '{name}'")));
@@ -862,6 +1005,28 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         },
     );
 
+    // A recipient this machine never approved is what a remote-write attacker leaves behind.
+    // It cannot decrypt anything, but the user should see it and decide.
+    let pending = store.pending_recipients()?;
+    push(
+        "recipients",
+        if pending.is_empty() { "ok" } else { "warning" },
+        if pending.is_empty() {
+            "every recipient in the repository is trusted by this machine".into()
+        } else {
+            format!(
+                "{} untrusted recipient(s) present (they receive no ciphertext): {} — \
+                 `akey devices trust <name>` to approve",
+                pending.len(),
+                pending
+                    .iter()
+                    .map(|(name, key)| format!("{name} ({key})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
+    );
+
     let now = Utc::now();
     let conflicts = crate::sync::pending_conflicts(&vault);
     push(
@@ -1081,7 +1246,8 @@ mod tests {
 
     #[test]
     fn a_second_device_joins_without_the_owner() {
-        // 一台机器建库，另一台用恢复密码引导——这是 S4 的核心路径。
+        // One machine creates the vault, another bootstraps with the recovery passphrase —
+        // the core path of S4.
         let owner_dir = tempfile::tempdir().unwrap();
         let (owner_cli, owner_ctx) = init_ctx(owner_dir.path());
         init(&owner_ctx, init_args(&owner_cli)).unwrap();
@@ -1090,7 +1256,7 @@ mod tests {
         let passphrase = SecretString::from("correct-horse-battery");
         set_recovery(&owner_ctx, passphrase.clone()).unwrap();
 
-        // 把仓库搬到一个裸远端，模拟"从远端引导"。
+        // Move the repository to a bare remote, simulating "bootstrap from a remote".
         let bare = tempfile::tempdir().unwrap();
         std::process::Command::new("git")
             .args(["init", "--bare", "--quiet"])
@@ -1114,7 +1280,8 @@ mod tests {
             "laptop",
         ]);
         let joiner_ctx = Ctx::new(&joiner_cli).unwrap();
-        // 直接传密码，避免在测试里改进程级环境变量（并行测试会互相踩）。
+        // Pass the passphrase directly rather than mutating process-level environment
+        // variables in a test (parallel tests would step on each other).
         init_from_remote(
             &joiner_ctx,
             init_args(&joiner_cli),
@@ -1125,7 +1292,7 @@ mod tests {
 
         let joiner_store = joiner_ctx.store().unwrap();
         assert_eq!(joiner_store.identity.name(), "laptop");
-        // 引导后的设备能独立解密金库。
+        // The bootstrapped device can decrypt the vault on its own.
         assert_eq!(joiner_store.load().unwrap().entries.len(), 0);
     }
 
@@ -1134,11 +1301,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (cli, ctx) = init_ctx(dir.path());
         init(&ctx, init_args(&cli)).unwrap();
-        let store = ctx.store().unwrap();
-
-        // 另一个"设备"把自己加入，然后被吊销。
+        // Another "device" is approved and joins, then gets revoked.
+        let mut store = ctx.store().unwrap();
         let stranger = DeviceIdentity::generate("stranger");
         let now = Utc::now();
+        // Approve first: without this step save_with would encrypt only to this device, and
+        // the "it can decrypt" assertion below would mean nothing.
+        store.trust(&[stranger.pubkey()], now).unwrap();
         store
             .with_lock(|store| {
                 let mut recipients = store.load_recipients()?;
@@ -1159,6 +1328,7 @@ mod tests {
                 store.save_with(&vault, &recipients)
             })
             .unwrap();
+        store.untrust(&stranger.pubkey()).unwrap();
 
         let err = stranger
             .decrypt(&fs::read(store.vault_path()).unwrap())
@@ -1204,7 +1374,7 @@ mod tests {
             .unwrap();
         assert_eq!(payload.version, 1);
 
-        // 轮换后旧密码失效、新密码可用。
+        // After the rotation the old passphrase stops working and the new one works.
         write_recovery(&store, &payload, &SecretString::from("second-passphrase-here"))
             .unwrap();
         assert!(
@@ -1268,7 +1438,7 @@ mod tests {
         assert_eq!(meta.allow.as_deref(), Some(&["openai".to_string()][..]));
         assert!(meta.deny_reveal);
         assert!(meta.expires_at.is_some());
-        // 库里只有摘要，没有明文。
+        // The vault holds only the digest, never the plaintext.
         let raw = serde_json::to_string(&vault).unwrap();
         assert!(!raw.contains("akey_"), "token plaintext leaked into the vault");
     }
@@ -1294,7 +1464,8 @@ mod tests {
             decrypt_recovery(&store, &new).is_ok(),
             "the new passphrase must work"
         );
-        // 旋转后引导身份仍能开库——否则换机路径就断了。
+        // After the rotation the bootstrap identity can still open the vault — otherwise
+        // the machine-transfer path would break.
         let payload = decrypt_recovery(&store, &new).unwrap();
         let bootstrap = DeviceIdentity::parse(&payload.bootstrap_identity, "bootstrap").unwrap();
         assert!(bootstrap.decrypt(&fs::read(store.vault_path()).unwrap()).is_ok());
@@ -1335,7 +1506,7 @@ mod tests {
             "a second `recovery set` must retire the previous bootstrap identity"
         );
 
-        // 只有最新那个密码有效，且它能开库。
+        // Only the newest passphrase works, and it can open the vault.
         assert!(
             decrypt_recovery(&store, &SecretString::from("first-passphrase-here")).is_err()
         );
@@ -1350,13 +1521,14 @@ mod tests {
         let short = SecretString::from("a");
         let long = SecretString::from("long-enough-to-be-a-passphrase");
 
-        // 新建：无论来源都必须够长（这条以前只在 TTY 路径成立，
-        // 走 AKEY_RECOVERY_PASSPHRASE 时能设出 1 字符的密码）。
+        // New: must be long enough no matter where it came from (this once held only on the
+        // TTY path, so AKEY_RECOVERY_PASSPHRASE could set a 1-character passphrase).
         assert!(enforce_min(short.clone(), true).is_err());
         assert_eq!(enforce_min(short.clone(), true).unwrap_err().exit_code(), 2);
         assert!(enforce_min(long.clone(), true).is_ok());
 
-        // 使用已有的：绝不能卡长度，否则收紧策略会让老金库彻底打不开。
+        // Existing: the length must never be enforced here, otherwise tightening the policy
+        // would make an old vault impossible to open.
         assert!(enforce_min(short, false).is_ok());
         assert!(enforce_min(long, false).is_ok());
     }

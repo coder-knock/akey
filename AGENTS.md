@@ -38,6 +38,10 @@ These are contracts, not preferences. Changing any of them is a breaking change.
    impl, an audit record, or anything but an explicit `--reveal` / `read` / `export`.
    `Field` and `Entry` have hand-written `Debug` for exactly this reason.
 6. **`Result<T, E = Error>`** — the alias keeps a defaulted error parameter.
+7. **Only locally trusted recipients get ciphertext.** `recipients.json` is distributed by an
+   untrusted remote; it is a directory, not an access decision. `Store::save_with` writes the whole
+   directory but encrypts only to `config.toml`'s `trusted` set. Do not "simplify" that intersection
+   away — it is the fix for the remote-write attack, and there is a regression test waiting.
 
 ## Layout
 

@@ -1,4 +1,4 @@
-//! 命令分发与共享上下文。
+//! Command dispatch and the shared context.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -17,8 +17,8 @@ pub mod admin;
 pub mod deliver;
 pub mod entries;
 
-/// 一次命令调用的共享上下文。**不**要求仓库已初始化——`schema` / `completion` / `--help`
-/// 必须能在任何状态下工作。
+/// Shared context for one command invocation. It does **not** require an initialised
+/// repository — `schema` / `completion` / `--help` must work in any state.
 pub struct Ctx {
     pub out: Output,
     pub paths: Paths,
@@ -45,7 +45,7 @@ impl Ctx {
         })
     }
 
-    /// 打开本机金库上下文。
+    /// Open the local vault context.
     pub fn store(&self) -> Result<Store> {
         let mut store = Store::open(self.paths.clone())?;
         if let Some(repo) = &self.repo_override {
@@ -58,7 +58,8 @@ impl Ctx {
         !self.out.quiet()
     }
 
-    /// 破坏性或把明文带出本机边界之外的操作用它挡一道。
+    /// Guards destructive operations, or ones that carry plaintext outside this machine's
+    /// boundary.
     pub fn confirm(&self, what: &str) -> Result<()> {
         if self.assume_yes {
             return Ok(());
@@ -68,9 +69,11 @@ impl Ctx {
         )))
     }
 
-    /// 校验 `AKEY_TOKEN` / `--token` 并返回其元数据；无令牌时返回 `None`。
+    /// Validate `AKEY_TOKEN` / `--token` and return its metadata; `None` when no token is
+    /// set.
     ///
-    /// **不做作用域检查**——作用域判断需要知道条目名，交给 [`Ctx::authorize`]。
+    /// **No scope check here** — scoping needs the entry name, so it belongs to
+    /// [`Ctx::authorize`].
     pub fn active_token<'v>(&self, vault: &'v Vault) -> Result<Option<&'v TokenMeta>> {
         let Some(raw) = &self.token else {
             return Ok(None);
@@ -87,9 +90,9 @@ impl Ctx {
         ))
     }
 
-    /// 校验令牌并检查它是否有权访问 `entry_name`。
+    /// Validate the token and check whether it may access `entry_name`.
     ///
-    /// 无令牌时返回 `None`（本机身份即最高权限）。
+    /// `None` when no token is set (the local device identity is the highest authority).
     pub fn authorize<'v>(
         &self,
         vault: &'v Vault,
@@ -102,7 +105,8 @@ impl Ctx {
         Ok(Some(meta))
     }
 
-    /// 明文暴露闸门：条目策略、环境开关、令牌策略三重检查。
+    /// The plaintext-exposure gate: a threefold check of entry policy, environment switch,
+    /// and token policy.
     pub fn gate_reveal(&self, vault: &Vault, entry: Option<&Entry>) -> Result<()> {
         if no_reveal_env() {
             return Err(Error::denied(
@@ -118,8 +122,10 @@ impl Ctx {
             )));
         }
         if let Some(meta) = self.active_token(vault)? {
-            // 先判作用域：令牌根本没资格碰这个条目时，报"越权"比报"不允许取明文"准确得多。
-            // agent 只读 error.code，含糊的 code 会让它去改 reveal 策略——而那是错的下一步。
+            // Check scope first: when the token has no claim on this entry at all,
+            // reporting "out of scope" is far more accurate than "plaintext not allowed".
+            // An agent reads only error.code, and a vague code sends it off to change the
+            // reveal policy — which is the wrong next step.
             if let Some(entry) = entry {
                 crate::crypto::token::authorize(meta, &entry.name, chrono::Utc::now())?;
             }
@@ -133,10 +139,11 @@ impl Ctx {
         Ok(())
     }
 
-    /// 写操作闸门。
+    /// The write gate.
     ///
-    /// 能力令牌是**只读凭据**（对标 1Password service account）。若放行写操作，
-    /// 一个只被授权读单个条目的 agent 就能改库或删条目——作用域形同虚设。
+    /// A capability token is a **read-only credential** (modelled on 1Password service
+    /// accounts). Letting writes through would mean an agent authorized to read a single
+    /// entry could modify the vault or delete entries — scoping would be a sham.
     pub fn gate_write(&self) -> Result<()> {
         match &self.token {
             Some(_) => Err(Error::denied(
@@ -147,11 +154,13 @@ impl Ctx {
         }
     }
 
-    /// 检查一批文本里出现的每个引用，确认当前令牌有权访问其条目。
+    /// Check every reference appearing in a batch of texts and confirm the current token
+    /// may access its entry.
     ///
-    /// `akey run` / `akey inject` 不经过 `gate_reveal`（它们不把明文交给调用者），
-    /// 但**作用域必须照样生效**——否则被限制在单条目的令牌只要把值注入
-    /// `sh -c 'cat'` 就能读到任何条目。
+    /// `akey run` / `akey inject` do not pass through `gate_reveal` (they do not hand
+    /// plaintext to the caller), but **scoping must still apply** — otherwise a token
+    /// restricted to a single entry could read any entry by injecting a value into
+    /// `sh -c 'cat'`.
     pub fn authorize_references(&self, vault: &Vault, texts: &[String]) -> Result<()> {
         if self.token.is_none() {
             return Ok(());
@@ -168,15 +177,18 @@ impl Ctx {
         Ok(())
     }
 
-    /// 令牌作用域内的条目名集合；无令牌或无限制时返回 `None`（= 全部可见）。
+    /// The set of entry names inside the token's scope; `None` when there is no token or no
+    /// restriction (= everything visible).
     pub fn scoped_names(&self, vault: &Vault) -> Result<Option<Vec<String>>> {
         Ok(self.active_token(vault)?.and_then(|meta| meta.allow.clone()))
     }
 
-    /// `--debug` 的诊断行。一律走 stderr，且**只报位置**，不报任何值。
+    /// Diagnostic lines for `--debug`. Always on stderr, and they **report locations only**,
+    /// never values.
     ///
-    /// 这个 flag 以前是死的（除了赋值没人读它），对一个"agent 要自己诊断"的工具来说
-    /// 那是文档撒谎。现在它至少回答"我到底在操作哪个 home、哪个仓库"。
+    /// This flag used to be dead (assigned but never read), which for a tool whose agents
+    /// must diagnose themselves amounted to the docs lying. Now it at least answers "which
+    /// home, which repository am I actually operating on".
     pub fn debug_banner(&self) {
         if !self.debug {
             return;
@@ -195,9 +207,10 @@ impl Ctx {
         );
     }
 
-    /// 当前主体是否被禁止拿到明文。
+    /// Whether the current principal is forbidden from receiving plaintext.
     ///
-    /// 为真时，任何"明文会抵达调用者"的路径都必须关闭，包括 `--no-masking`。
+    /// When true, every path where plaintext could reach the caller must be closed,
+    /// including `--no-masking`.
     pub fn plaintext_forbidden(&self, vault: &Vault) -> Result<bool> {
         if no_reveal_env() {
             return Ok(true);
@@ -207,13 +220,14 @@ impl Ctx {
             .is_some_and(|meta| meta.deny_reveal))
     }
 
-    /// 对文本里出现的每个引用，按其所属条目过一遍 reveal 闸门。
+    /// Run every reference appearing in the texts through the reveal gate for its entry.
     ///
-    /// `inject` 必须用它。设计上曾把 `inject` 和 `run` 归为一类（"不把明文交给调用者"）——
-    /// 这对 `run` 成立（明文进的是**子进程**，且子进程回显被掩蔽），
-    /// 对 `inject` **不成立**：渲染结果写的就是调用者的 stdout，它是 `read` 的批量版。
-    /// 少了这道闸门，`AKEY_NO_REVEAL` 与令牌的 `--deny-reveal` 都能被一句
-    /// `printf 'x=akey://a/b' | akey inject` 绕过。
+    /// `inject` must use this. The design once grouped `inject` and `run` together ("does
+    /// not hand plaintext to the caller") — true for `run` (the plaintext goes to a **child
+    /// process**, and the child's echo is masked), but **not** for `inject`: what it renders
+    /// is written straight to the caller's stdout, making it the batch form of `read`.
+    /// Without this gate, `AKEY_NO_REVEAL` and a token's `--deny-reveal` can both be bypassed
+    /// with one `printf 'x=akey://a/b' | akey inject`.
     pub fn gate_references_reveal(&self, vault: &Vault, texts: &[String]) -> Result<()> {
         for text in texts {
             for raw in crate::reference::extract_references(text) {
@@ -227,7 +241,7 @@ impl Ctx {
     }
 }
 
-/// `AKEY_NO_REVEAL` 只要非空且不是 `0`/`false` 即生效。
+/// `AKEY_NO_REVEAL` takes effect as long as it is non-empty and is not `0`/`false`.
 fn no_reveal_env() -> bool {
     match std::env::var("AKEY_NO_REVEAL") {
         Ok(v) => {
@@ -238,9 +252,10 @@ fn no_reveal_env() -> bool {
     }
 }
 
-/// 解析 `<n><unit>` 形式的时长：`s` `m` `h` `d` `w`，无单位按秒。负数与非法输入 → `Usage`。
+/// Parse a duration of the form `<n><unit>`: `s` `m` `h` `d` `w`, with a bare number
+/// meaning seconds. Negative and malformed input → `Usage`.
 ///
-/// 被 `--expiring 30d`、`--ttl 30d` 共用，所以只有这一份实现。
+/// Shared by `--expiring 30d` and `--ttl 30d`, so this is the single implementation.
 pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -342,8 +357,9 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
         outcome.as_str(),
     )?;
 
-    // 冲突要走**纯错误路径**：失败的命令不得往 stdout 写东西。
-    // 合并本身已经提交并推送成功，但需要人来挑一边——agent 应当从退出码察觉。
+    // Conflicts must take the **pure-error path**: a failing command must not write to
+    // stdout. The merge itself is already committed and pushed, but a human has to pick a
+    // side — an agent should notice that from the exit code.
     if let SyncOutcome::Merged { conflicts, .. } = &outcome
         && !conflicts.is_empty()
     {
@@ -373,10 +389,19 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
         }
     };
 
+    // A key sitting in recipients.json that this machine never approved is exactly what a
+    // remote-write attacker produces. Surface it loudly: encryption will not use it, but the
+    // user has to be the one who decides whether it is a device they actually added.
+    let pending = store.pending_recipients()?;
+
     let data = serde_json::json!({
         "outcome": outcome.as_str(),
         "summary": human,
         "remote": store.config.remote,
+        "pending_recipients": pending
+            .iter()
+            .map(|(name, key)| serde_json::json!({ "name": name, "pubkey": key }))
+            .collect::<Vec<_>>(),
         "conflicts": match &outcome {
             SyncOutcome::Merged { conflicts, .. } => conflicts
                 .iter()
@@ -391,5 +416,19 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
     });
 
     ctx.out.emit(human, &data)?;
+
+    if !pending.is_empty() {
+        let mut listed = Vec::new();
+        for (name, key) in &pending {
+            listed.push(format!("{name} ({key})"));
+        }
+        let joined = listed.join(", ");
+        ctx.out.warn(&format!(
+            "{} recipient(s) in the repository are not trusted by this machine and will NOT \
+             receive ciphertext: {joined}. Run `akey devices trust <name>` if you added them, \
+             or `akey doctor` to investigate.",
+            pending.len()
+        ));
+    }
     Ok(())
 }

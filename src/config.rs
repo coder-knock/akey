@@ -1,5 +1,6 @@
-//! `$AKEY_HOME/config.toml` —— 本机私有配置，绝不同步。
+//! `$AKEY_HOME/config.toml` — machine-local private config, never synced.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -10,13 +11,34 @@ use crate::paths::{self, Paths};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    /// 同步仓库的工作区路径（绝对路径），密文与 `recipients.json` 都在这里。
+    /// Workspace path of the sync repo (absolute); ciphertext and `recipients.json` live here.
     pub repo: PathBuf,
-    /// git 远端 URL；`None` = 纯本地库。
+    /// git remote URL; `None` = purely local vault.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
-    /// 本机设备名，出现在 `recipients.json` 与审计日志中。
+    /// This machine's device name, appearing in `recipients.json` and the audit log.
     pub device_name: String,
+    /// This machine's **approved** recipient public keys → approval time.
+    ///
+    /// This is local policy, **never stored in the repo**. `recipients.json` says "who exists"
+    /// (the remote can stuff people in); this set says "who is allowed to decrypt" (the remote
+    /// cannot stuff anyone in). `encrypt_to` intersects the two.
+    ///
+    /// Why it exists: anyone who can write the remote can add their own public key to
+    /// `recipients.json`, and the next legitimate write re-encrypts "to all active recipients" —
+    /// which hands the entire vault (including history) to the attacker. With this set, the
+    /// attacker's key only ever shows up in the directory and never receives ciphertext.
+    #[serde(default)]
+    pub trusted: BTreeMap<String, DateTime<Utc>>,
+
+    /// Upgrade marker for old configs that lack the `trusted` field.
+    ///
+    /// Its only reason to exist is to avoid conflating "never initialized" with "explicitly
+    /// approved zero recipients" — the latter is a valid state (trust nobody), and must not be
+    /// used to seed.
+    #[serde(default)]
+    pub trust_seeded: bool,
+
     pub created_at: DateTime<Utc>,
 }
 
@@ -36,7 +58,7 @@ impl Config {
         Ok(config)
     }
 
-    /// 未初始化时返回 `None`，用于区分"没配过"与"配坏了"。
+    /// Returns `None` when uninitialized, distinguishing "never configured" from "configured but broken".
     pub fn try_load(paths: &Paths) -> Result<Option<Config>> {
         if paths.has_config() {
             Config::load(paths).map(Some)
@@ -52,7 +74,7 @@ impl Config {
         paths::atomic_write(&paths.config, rendered.as_bytes(), paths::FILE_MODE)
     }
 
-    /// 把 `~` 展开到 `$HOME`，并相对当前目录补齐为绝对路径。
+    /// Expands `~` to `$HOME` and resolves against the current directory to an absolute path.
     pub fn normalise_repo(raw: &Path) -> Result<PathBuf> {
         let expanded = expand_home(raw);
         if expanded.is_absolute() {
@@ -79,6 +101,22 @@ fn expand_home(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// Write a config the way `Config::save` does. On unix the mode matters: `Config::load`
+    /// refuses a config other users could read, and `fs::write` alone would create a `0644` one.
+    fn write_config(paths: &Paths, data: &str) {
+        std::fs::write(&paths.config, data).unwrap();
+        #[cfg(unix)]
+        {
+            #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                &paths.config,
+                std::fs::Permissions::from_mode(paths::FILE_MODE),
+            )
+            .unwrap();
+        }
+    }
+
     use super::*;
     use crate::paths::Paths;
     use std::os::unix::fs::PermissionsExt;
@@ -95,6 +133,8 @@ mod tests {
             repo: PathBuf::from("/tmp/vault-repo"),
             remote: Some("git@github.com:me/akey-vault.git".into()),
             device_name: "macbook".into(),
+            trusted: BTreeMap::new(),
+            trust_seeded: true,
             created_at: Utc::now(),
         }
     }
@@ -125,12 +165,7 @@ mod tests {
     fn remote_defaults_to_absent_and_reveal_defaults_to_allowed() {
         let (_guard, paths) = setup();
         let rendered = "repo = \"/tmp/r\"\ndevice_name = \"d\"\ncreated_at = \"2026-09-19T00:00:00Z\"\n";
-        std::fs::write(&paths.config, rendered).unwrap();
-        std::fs::set_permissions(
-            &paths.config,
-            std::fs::Permissions::from_mode(paths::FILE_MODE),
-        )
-        .unwrap();
+        write_config(&paths, rendered);
 
         let config = Config::load(&paths).unwrap();
         assert!(config.remote.is_none());
@@ -146,12 +181,7 @@ mod tests {
     #[test]
     fn corrupt_toml_is_reported_as_corrupt_not_locked() {
         let (_guard, paths) = setup();
-        std::fs::write(&paths.config, b"this is not = = toml").unwrap();
-        std::fs::set_permissions(
-            &paths.config,
-            std::fs::Permissions::from_mode(paths::FILE_MODE),
-        )
-        .unwrap();
+        write_config(&paths, "this is not = = toml");
 
         let err = Config::load(&paths).unwrap_err();
         assert!(matches!(err, Error::Corrupt(_)));

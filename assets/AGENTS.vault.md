@@ -70,3 +70,13 @@ akey sync --json
 
 If it exits 5, run `akey conflicts --json`. Two devices changed the same entry; both versions
 were kept. Resolve with `akey resolve <name> --ours|--theirs`, then `akey sync` again.
+
+`sync` also reports recipients that are listed in this repository but not approved by the machine
+running it. Those keys receive **no ciphertext** — the repository is a directory, not an access
+decision. If a device you personally added shows up as pending, that is a decision for a human on
+each machine:
+```bash
+# once on every existing machine, so the new device can read what they write
+akey devices trust <name>
+```
+Never run `akey devices trust` on a key you cannot account for.

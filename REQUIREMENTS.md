@@ -141,7 +141,8 @@
 **FR-9 冲突处理（MUST，D3）** — `conflicts` 列出、`resolve --ours|--theirs` 收敛。
 `sync` 一旦产生冲突副本，即返回退出码 `5` 且 stdout 为空（提交与推送本身已完成）；
 详情由 `akey conflicts --json` 给出。
-**FR-10 设备管理（MUST）** — `devices list|add|rm|rename`；`rm` 重新加密并排除该设备
+**FR-10 设备管理（MUST）** — `devices list|add|rm|rename|trust|untrust`；
+`rm` 重新加密并排除该设备；`trust` / `untrust` 控制**本地信任集合**（见 FR-21）
 **FR-11 恢复（MUST，D2）** — `recovery set|rotate|unlock`；`init --from` 走恢复密码引导
 **FR-12 审计日志（MUST）** — 本地 append-only，记 `设备ID / 条目ID / 动作 / 结果 / 时间戳`；**不含明文**
 **FR-13 过期与健康（SHOULD）** — `list --expiring 30d`；`doctor` 检查权限位、远端可达、冲突、令牌过期、身份是否仍被授权
@@ -164,6 +165,12 @@
 它依赖一个常驻的 GUI 授权通道，而本期的定位是无守护进程的单二进制；等 GUI 轮次再评估。
 **FR-20 文件附件（SHOULD）** — `doc get/put`，用于 kubeconfig、service-account json
 
+**FR-21 本地信任集合（MUST）** — `recipients.json` 说「谁存在」，本机 `config.toml` 里的
+`trusted` 集合说「谁被允许解密」；**加密只给二者的交集**。因此能写远端的人可以往目录里塞公钥，
+但拿不到任何密文。未获批准的公钥由 `sync` 与 `doctor` 报为 pending；`devices trust <名字|公钥>`
+批准并立刻重新加密，`devices untrust` 撤回。`init --from` 信任引导那一刻已在库里的收件人
+（交出恢复密码即信任锚），此后出现的公钥永不自动信任。
+
 ---
 
 ## 7. 非功能需求
@@ -185,6 +192,7 @@
 | 威胁 | 对策 |
 |---|---|
 | T1 远端仓库泄露 | 仓内只有密文；无私钥/恢复密码不可解 |
+| T1b **远端可写**（账号被盗 / 令牌泄漏 / 恶意托管） | FR-21 本地信任集合：往 `recipients.json` 塞公钥不会让任何密文被加密给它 |
 | T2 明文进 LLM 上下文 / 终端 scrollback / 日志 | D1 + FR-4 + FR-6 遮蔽 + NFR-9 |
 | T3 本机被读 | 身份文件 `0600`；vault 密文；无明文落盘 |
 | T4 设备丢失 | `devices rm` + 重新加密 |

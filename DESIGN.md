@@ -126,7 +126,8 @@ pub struct TokenMeta {
 
 ### 4.2 `vault.age` / `recovery.age`
 
-- `vault.age`：`age` v1 **二进制**格式，收件人 = `recipients.json` 中所有未吊销公钥。
+- `vault.age`：`age` v1 **二进制**格式，收件人 = `recipients.json` 中未吊销公钥 **∩** 本机
+  `config.toml` 的 `trusted` 集合。交集不可省：目录由不可信远端分发，它不能决定谁能解密。
 - `recovery.age`：`age` passphrase 格式（scrypt），明文是
   `{"version":1,"bootstrap_identity":"AGE-SECRET-KEY-1…","created_at":"…"}`。
   仅在设置了恢复密码且**生成了引导身份**时存在。
@@ -136,7 +137,7 @@ pub struct TokenMeta {
 | 文件 | 内容 | 权限 |
 |---|---|---|
 | `identity.key` | `AGE-SECRET-KEY-1…` 单行 | `0600`，目录 `0700` |
-| `config.toml` | `repo` · `remote` · `device_name` · `default_reveal` | `0600` |
+| `config.toml` | `repo` · `remote` · `device_name` · `trusted` · `trust_seeded` | `0600` |
 | `audit.log` | JSONL | `0600` |
 | `vault.lock` | 空文件，仅用于加锁 | `0600` |
 

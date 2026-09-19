@@ -97,6 +97,10 @@ value**. It answers "what is there"; `akey run` answers "use it".
 akey sync --json     # exit 5 = conflicts await resolution (the merge and push already succeeded; nothing was lost)
 ```
 
+`sync` reports any recipient that appears in the repository without this machine's approval. Those
+keys receive **no ciphertext**. If a device you actually added shows up as pending, approve it with
+`akey devices trust <name>` — a human has to do that on each existing machine.
+
 ## Full version
 
 `docs/AGENT-INTEGRATION.md` — recipes (curl / node / docker / gh / databases / 2FA), CI setup,

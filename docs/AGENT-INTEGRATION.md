@@ -310,6 +310,10 @@ akey doc get akey://k8s-prod/kubeconfig -o ./kubeconfig
 
 # Migrate in from another vault (duplicate names are refused; --merge overwrites matching fields)
 akey import --as json -i dump.json --merge
+
+# Approve a new device. Run this on **every existing machine** before that device
+# can read what the machine writes.
+akey devices trust laptop
 ```
 
 Assignment syntax is `[<section>.]<field>[[<type>]]=<value>`, e.g. `akey set api 'creds.token[concealed]=abc'`.
@@ -434,10 +438,11 @@ For authoritative, complete information: `akey schema --json`.
   prints. A child that means to exfiltrate already has the value in its environment; it can base64
   it, split it across stdout and stderr, or write it to a socket. Do not treat `akey run` as a
   confidentiality boundary against hostile code.
-- **The remote decides who can read.** `recipients.json` is distributed by the git remote. If you
-  control the machine but someone else can write to that remote, they can add a key and the next
-  legitimate write re-encrypts the vault to them. Until this is hardened, treat the vault remote as
-  a high-value credential. Details: `docs/SECURITY.md` §5.
+- **The remote cannot decide who can read.** `recipients.json` is distributed by the git remote, so
+  a key pushed into it is *listed* but never encrypted to — encryption goes only to keys this
+  machine approved locally. A device joining from elsewhere therefore needs a human on each existing
+  machine to run `akey devices trust <name>` before it can read what that machine writes. `akey sync`
+  and `akey doctor` report unapproved keys as pending. Details: `docs/SECURITY.md` §5.
 - **A token is a policy check, not a separate identity.** Anyone who can run `akey` on a device can
   read `identity.key`. Use tokens to limit what *an agent's normal commands* touch — not as a
   cryptographic boundary.

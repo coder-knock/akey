@@ -16,16 +16,16 @@
 |---|---|---|
 | The git remote, **read** access | **Nothing readable.** Only `vault.age` (age/X25519), `recipients.json` (public keys), `recovery.age` (scrypt). No private key is ever in the repo. | Must break the recovery passphrase offline — see §7 |
 | One device's local directory | **Everything.** `identity.key` *is* the vault. | Trivial — but this is the declared trust boundary, not a defect |
-| The git remote, **write** access | **Everything, retroactively** — see A1 | One ordinary `git push` |
+| The git remote, **write** access | **Nothing** — see §5. A key pushed into `recipients.json` appears in the directory but is never encrypted to. | — *(was: full disclosure, retroactively)* |
 | A scoped capability token | Only what `--allow` permits — **after the fixes in §4** | — |
 
 **Bottom line.** The cryptography is not the weak link. `age` is used correctly, the recipient set
 is enforced at every encryption, and no plaintext ever reaches disk or the repository. The weak
 links are **policy enforcement on the CLI surface** and **the trust placed in `recipients.json`**.
 
-Of the 16 findings, **13 were fixed** during this assessment (most with regression tests), two are
-documented trade-offs, and one is **open and serious** (A1) — it needs a product decision, not a
-patch. See §5.
+**All 14 actionable findings were fixed** during this assessment, most with regression tests; the
+remaining two entries are documented trade-offs, not defects. The one that took a design change
+rather than a patch — remote write access yielding plaintext — is §5.
 
 ---
 
@@ -161,7 +161,7 @@ directly.
 
 | ID | Severity | Finding | Status |
 |---|---|---|---|
-| **A1** | **Critical** | Remote write access → recipient injection → retroactive full plaintext | **OPEN** — see §5 |
+| **A1** | **Critical** | Remote write access → recipient injection → retroactive full plaintext | **Fixed + test** — see §5 |
 | A2 | High | Fast-forward path bypassed "revocation wins"; a revoked device re-admitted itself | Fixed + test |
 | A3 | High | `inject` was a plaintext egress that skipped every reveal gate | Fixed + test |
 | A4 | High | `otp` fields were not concealed → the TOTP **seed** printed by default | Fixed + test |
@@ -190,34 +190,44 @@ Notable non-findings, i.e. things that were checked and are **sound**:
 
 ---
 
-## 5. A1 — the open issue, and why it needs a decision
+## 5. A1 — remote write access, and how it was closed
 
-`recipients.json` decides who can decrypt the vault, and it is distributed by the remote and
-adopted **without any authentication, confirmation or warning**. Anyone who can write to the remote
-adds a public key; the next legitimate write re-encrypts the entire vault — including history — to
-that key.
+`recipients.json` is distributed by the remote and was adopted without any authentication. Anyone
+who could write to it added a public key, and the next legitimate write re-encrypted the entire
+vault — history included — to that key. This defeated the design's central promise: the remote was
+treated as untrusted for *reading* while being implicitly trusted for *writing*.
 
-This defeats the design's central promise. "The remote holds only ciphertext" is true for a remote
-that can *read*, and false for one that can *write* — and a compromised GitHub account, a
-leaked CI token, or a malicious host all grant write.
+**The fix: a local trust set.**
 
-**Why it is not patched here.** Every fix changes the product's UX, and the choice is the owner's:
+`recipients.json` now answers "who exists". A second set, in `~/.config/akey/config.toml` and never
+synced, answers "who is allowed to decrypt". Encryption uses the intersection.
 
-| Option | Effect on the normal flow | Strength |
-|---|---|---|
-| **(a) Refuse to encrypt to unapproved recipients.** Keep a local, never-synced trusted set in `config.toml`; new recipients are recorded as *pending* and need `akey devices trust <pubkey>`. | Adding a device now needs one extra command **on every other device** | Strong — the attacker gains nothing |
-| **(b) Signed recipient entries.** Each added device's entry carries a signature from an existing device's key. | No extra user steps | Strongest, but needs a signing key type (age X25519 does not sign) |
-| **(c) Loud, explicit acceptance.** `sync` refuses and exits non-zero when unknown recipients appear until re-run with `--accept-recipients`. | One explicit step, once | Strong against silent attack, weak against a user who always says yes |
+- `Store::save_with` still writes the full directory — devices have to see each other — but encrypts
+  only to locally approved keys.
+- A key present in the repository without approval is reported as **pending** by `akey sync` and
+  `akey doctor`, and receives nothing.
+- `akey devices trust <name|pubkey>` approves one and immediately re-encrypts the current vault to
+  it, so it does not have to wait for the next write; `akey devices untrust` reverses that.
+- `akey init` trusts the machine itself. `akey init --from` trusts the recipients already in the
+  vault at bootstrap time: those are exactly the machines that could open the vault whose recovery
+  passphrase the operator just supplied, so handing over that passphrase is the trust anchor. Keys
+  appearing **after** bootstrap are never auto-trusted.
+- `akey devices rm` drops the key from the trust set as well as from the directory.
 
-**Recommendation: (a)**, optionally with (c)'s reporting. It is a local policy check, not a new
-cryptographic mechanism, and it composes with the "never trust the remote for anything that decides
-access" rule that A2 already follows.
+**The cost** is one extra command on every *other* device when a new one joins:
 
-Until then: **treat the vault remote as a high-value credential.** Enable 2FA, scope any token that
-can write to it, and prefer a private repository. `akey doctor` reports nothing about unknown
-recipients — a gap worth closing alongside the fix.
+```bash
+akey devices trust laptop
+```
 
----
+**Regression test:** `tests/e2e_sync.rs::an_injected_recipient_never_receives_ciphertext` replays
+the full attack — clone the remote, add a public key, push — and asserts that the injected key is
+surfaced as pending and stays locked out (exit 4) even after the victim writes again.
+
+**Residual (R8).** A device that bootstraps *after* an injection inherits the injected key through
+the "trust what was already there" rule. Closing that would require the joining device to prove it
+decrypted the vault — and without a signature primitive (age's X25519 cannot sign), that means every
+existing device would have to verify the recovery passphrase itself. Not implemented; documented.
 
 ## 6. Residual risks
 
@@ -230,6 +240,7 @@ recipients — a gap worth closing alongside the fix.
 | R5 | Masking evades on re-encoding (§3.6) | Documented; masking is not the boundary |
 | R6 | Metadata leaks (device names, timing, entry count) | A single encrypted file hides entry *names* by design; git inherently timestamps commits |
 | R7 | `age 0.12` is pre-1.0 and upstream calls it "for testing purposes only" | Pinned; the format is a stable public spec, and correctness is covered by our own round-trip tests |
+| R8 | A device bootstrapping after an injection inherits the injected key | See §5. Requires a signature primitive to close properly |
 
 ---
 
