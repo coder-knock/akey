@@ -44,7 +44,8 @@ akey failure.
 ## Language
 
 Add `--lang en` if you parse any human-readable text; `--json` output is identical in every
-language, so prefer that. Supported: `en`, `zh-CN`.
+language, so prefer that. Supported: `en`, `zh-CN`. Exception: `schema --json` carries the
+`--help` strings and does follow `--lang`.
 
 ## Finding the reference string
 

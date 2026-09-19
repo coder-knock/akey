@@ -115,10 +115,12 @@ AKEY_LANG=zh-CN akey list     # or via the environment
 akey list                     # otherwise $LC_ALL / $LC_MESSAGES / $LANG, else en
 ```
 
-`--json` is byte-identical in every language — an agent branches on `error.code` and stable keys,
-never on prose. An explicit `--lang` that names no supported language is refused with exit 2
-rather than silently downgraded; an unrecognized *locale* falls back to English, because most of
-the world's locales are not a request for anything specific.
+`--json` is byte-identical in every language — an agent branches on `error.code` and stable
+keys, never on prose. The one exception is `akey schema`, whose `summary` and `args[].help` are
+the same strings `--help` prints and therefore follow `--lang`; every other payload is stable.
+An explicit `--lang` that names no supported language is refused with exit 2 rather than silently
+downgraded; an unrecognized *locale* falls back to English, because most of the world's locales
+are not a request for anything specific.
 
 English is the source language and is complete. Chinese covers the help text, the hints, and the
 strings converted so far; unconverted text stays English rather than going missing, since every

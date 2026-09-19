@@ -92,6 +92,11 @@ Every command accepts a global `--lang <tag>` (or `$AKEY_LANG`). It changes **hu
 text only**: `--json` is byte-identical in every language, so parse `error.code` and the stable
 keys, never the prose around them.
 
+The one exception is `akey schema`, whose `summary` and `args[].help` fields *are* the `--help`
+strings and so follow `--lang`. Every other payload — `list`, `get`, `doctor`, `whoami`,
+`devices list`, and the rest — is stable. If you cache or diff `schema` output, pin
+`--lang en` first.
+
 If you match on human text for any reason, pin the language — `akey --lang en …` — so a user's
 locale cannot change what you are matching. Supported tags are `en` and `zh-CN`; anything else is
 refused with exit 2 when you asked for it explicitly by name.

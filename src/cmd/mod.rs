@@ -200,17 +200,44 @@ impl Ctx {
         if !self.debug {
             return;
         }
-        eprintln!("debug: home  = {}", self.paths.home.display());
         eprintln!(
-            "debug: repo  = {}",
-            self.repo_override
-                .as_deref()
-                .map_or_else(|| "(from config.toml)".to_string(), |p| p.display().to_string())
+            "{}",
+            crate::msg!(
+                "debug: home  = {}",
+                "调试：主目录 = {}",
+                self.paths.home.display()
+            )
         );
-        eprintln!("debug: format = {}", if self.out.is_json() { "json" } else { "human" });
         eprintln!(
-            "debug: token  = {}",
-            if self.token.is_some() { "present (value withheld)" } else { "none" }
+            "{}",
+            crate::msg!(
+                "debug: repo  = {}",
+                "调试：仓库  = {}",
+                self.repo_override.as_deref().map_or_else(
+                    || crate::msg!("(from config.toml)", "（来自 config.toml）"),
+                    |p| p.display().to_string()
+                )
+            )
+        );
+        eprintln!(
+            "{}",
+            crate::msg!(
+                "debug: format = {}",
+                "调试：格式  = {}",
+                if self.out.is_json() { "json" } else { "human" }
+            )
+        );
+        eprintln!(
+            "{}",
+            crate::msg!(
+                "debug: token  = {}",
+                "调试：令牌  = {}",
+                if self.token.is_some() {
+                    crate::msg!("present (value withheld)", "存在（值已隐藏）")
+                } else {
+                    crate::msg!("none", "无")
+                }
+            )
         );
     }
 
@@ -372,7 +399,10 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
     let store = ctx.store()?;
     if ctx.dry_run {
         return ctx.out.emit(
-            "dry run: would sync with the configured remote",
+            crate::msg!(
+                "dry run: would sync with the configured remote",
+                "试运行：将与配置的远端同步"
+            ),
             &serde_json::json!({ "action": "sync", "mode": format!("{:?}", args.mode()).to_lowercase() }),
         );
     }
@@ -460,11 +490,14 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
             listed.push(format!("{name} ({key})"));
         }
         let joined = listed.join(", ");
-        ctx.out.warn(&format!(
+        ctx.out.warn(&crate::msg!(
             "{} recipient(s) in the repository are not trusted by this machine and will NOT \
-             receive ciphertext: {joined}. Run `akey devices trust <name>` if you added them, \
+             receive ciphertext: {}. Run `akey devices trust <name>` if you added them, \
              or `akey doctor` to investigate.",
-            pending.len()
+            "仓库中有 {} 个收件人未被本机信任，将不会收到密文：{}。如果这些是你添加的，\
+             请运行 `akey devices trust <name>`；或运行 `akey doctor` 排查。",
+            pending.len(),
+            joined
         ));
     }
     Ok(())

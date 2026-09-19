@@ -105,7 +105,13 @@ impl Output {
 
     pub fn warn(&self, msg: &str) {
         if !self.quiet {
-            eprintln!("{}", self.paint(&format!("warning: {msg}"), YELLOW));
+            eprintln!(
+                "{}",
+                self.paint(
+                    &format!("{}{msg}", crate::i18n::m("warning: ", "警告：")),
+                    YELLOW
+                )
+            );
         }
     }
 
@@ -119,9 +125,14 @@ impl Output {
             eprintln!("{rendered}");
             return;
         }
-        eprintln!("{} {err}", self.paint("error:", RED));
+        // The trailing space lives inside the English label: a full-width colon already
+        // supplies the gap in Chinese, and a shared "{} {err}" format cannot vary it.
+        eprintln!(
+            "{}{err}",
+            self.paint(crate::i18n::m("error: ", "错误："), RED)
+        );
         if let Some(hint) = err.hint() {
-            eprintln!("  hint: {hint}");
+            eprintln!("  {}{hint}", crate::i18n::m("hint: ", "提示："));
         }
     }
 

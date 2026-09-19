@@ -68,8 +68,9 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
         // still produced a plaintext file.
         Some(path) if ctx.dry_run => {
             ctx.out.emit(
-                format!(
+                crate::msg!(
                     "dry run: would write {} byte(s) of plaintext to {}",
+                    "试运行：将把 {} 字节明文写入 {}",
                     payload.len(),
                     path.display()
                 ),
@@ -84,7 +85,12 @@ pub fn read(ctx: &Ctx, args: &ReadArgs) -> Result<()> {
         Some(path) => {
             paths::atomic_write(path, payload.as_bytes(), FILE_MODE)?;
             ctx.out.emit(
-                format!("wrote {} byte(s) to {}", payload.len(), path.display()),
+                crate::msg!(
+                    "wrote {} byte(s) to {}",
+                    "已写入 {} 字节到 {}",
+                    payload.len(),
+                    path.display()
+                ),
                 &json!({
                     "reference": reference.to_string(),
                     "out_file": path.display().to_string(),
@@ -193,8 +199,9 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
         // Same as `read`: `--dry-run` must not write plaintext to disk.
         Some(path) if ctx.dry_run => {
             ctx.out.emit(
-                format!(
+                crate::msg!(
                     "dry run: would write {} byte(s) of plaintext to {}",
+                    "试运行：将把 {} 字节明文写入 {}",
                     rendered.len(),
                     path.display()
                 ),
@@ -208,7 +215,12 @@ pub fn inject(ctx: &Ctx, args: &InjectArgs) -> Result<()> {
         Some(path) => {
             paths::atomic_write(path, rendered.as_bytes(), FILE_MODE)?;
             ctx.out.emit(
-                format!("wrote {} byte(s) to {}", rendered.len(), path.display()),
+                crate::msg!(
+                    "wrote {} byte(s) to {}",
+                    "已写入 {} 字节到 {}",
+                    rendered.len(),
+                    path.display()
+                ),
                 &json!({
                     "out_file": path.display().to_string(),
                     "bytes": rendered.len(),
@@ -289,8 +301,9 @@ pub fn export(ctx: &Ctx, args: &ExportArgs) -> Result<()> {
         Some(path) => {
             paths::atomic_write(path, rendered.as_bytes(), FILE_MODE)?;
             ctx.out.emit(
-                format!(
+                crate::msg!(
                     "wrote {} byte(s) of plaintext to {}",
+                    "已将 {} 字节明文写入 {}",
                     rendered.len(),
                     path.display()
                 ),
@@ -493,16 +506,20 @@ pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
     let plan = plan_import(&vault, incoming, args.merge)?;
 
     if ctx.dry_run {
+        // English pluralises the noun while Chinese does not, so the noun is the localized unit
+        // and the counts stay separate arguments in both languages.
+        let noun = if plan.creates.len() + plan.merges.len() == 1 {
+            crate::msg!("entry", "条目")
+        } else {
+            crate::msg!("entries", "条目")
+        };
         return ctx.out.emit(
-            format!(
-                "dry run: would create {} and merge {} entr{}",
+            crate::msg!(
+                "dry run: would create {} and merge {} {}",
+                "试运行：将创建 {} 并合并 {} 个{}",
                 plan.creates.len(),
                 plan.merges.len(),
-                if plan.creates.len() + plan.merges.len() == 1 {
-                    "y"
-                } else {
-                    "ies"
-                }
+                noun
             ),
             &json!({
                 "dry_run": true,
@@ -515,10 +532,20 @@ pub fn import(ctx: &Ctx, args: &ImportArgs) -> Result<()> {
 
     let report = store.update(|vault| Ok(apply_plan(vault, plan, Utc::now())))?;
     ctx.out.emit(
-        format!(
-            "imported {} new and merged {} existing entr{} ({} field(s) written, {} added)",
-            report.created, report.merged, if report.created + report.merged == 1 { "y" } else { "ies" },
-            report.fields_written, report.fields_added
+        crate::msg!(
+            "imported {} new and merged {} existing {} ({} field(s) written, {} added)",
+            "已导入 {} 条新条目、合并 {} 条已有 {}（写入 {} 个字段，新增 {} 个）",
+            report.created,
+            report.merged,
+            // Chinese has no plural suffix to consume, so the localizable unit is the noun
+            // and the placeholder count stays equal in both templates.
+            if report.created + report.merged == 1 {
+                crate::msg!("entry", "条目")
+            } else {
+                crate::msg!("entries", "条目")
+            },
+            report.fields_written,
+            report.fields_added
         ),
         &json!({
             "source": source,
@@ -934,7 +961,12 @@ fn doc_get(ctx: &Ctx, raw: &str, out_file: Option<&Path>) -> Result<()> {
         Some(path) => {
             paths::atomic_write(path, &bytes, FILE_MODE)?;
             ctx.out.emit(
-                format!("wrote {} byte(s) to {}", bytes.len(), path.display()),
+                crate::msg!(
+                    "wrote {} byte(s) to {}",
+                    "已写入 {} 字节到 {}",
+                    bytes.len(),
+                    path.display()
+                ),
                 &json!({
                     "item": entry.name,
                     "field": reference.field,
@@ -995,7 +1027,13 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
 
     if ctx.dry_run {
         return ctx.out.emit(
-            format!("dry run: would attach {} byte(s) to {name}/{field_id}", bytes.len()),
+            crate::msg!(
+                "dry run: would attach {} byte(s) to {}/{}",
+                "试运行：将把 {} 字节附加到 {}/{}",
+                bytes.len(),
+                name,
+                field_id
+            ),
             &json!({
                 "dry_run": true,
                 "item": name,
@@ -1027,7 +1065,13 @@ fn doc_put(ctx: &Ctx, item: &str, file: &Path, label: &str) -> Result<()> {
     })?;
 
     ctx.out.emit(
-        format!("attached {} byte(s) to {name}/{field_id}", bytes.len()),
+        crate::msg!(
+            "attached {} byte(s) to {}/{}",
+            "已把 {} 字节附加到 {}/{}",
+            bytes.len(),
+            name,
+            field_id
+        ),
         &json!({"item": name, "field": field_id, "bytes": bytes.len()}),
     )?;
     audit::record(

@@ -94,9 +94,10 @@ fn read_passphrase(confirm: bool) -> Result<SecretString> {
         return enforce_min(SecretString::from(line), confirm);
     }
 
-    let first = rpassword::prompt_password("Recovery passphrase: ")?;
+    let first = rpassword::prompt_password(crate::i18n::m("Recovery passphrase: ", "恢复密码："))?;
     if confirm {
-        let second = rpassword::prompt_password("Repeat passphrase: ")?;
+        let second =
+            rpassword::prompt_password(crate::i18n::m("Repeat passphrase: ", "重复密码："))?;
         if first != second {
             return Err(Error::usage(crate::msg!(
                 "passphrases do not match",
@@ -253,8 +254,10 @@ fn init_fresh(ctx: &Ctx, args: &InitArgs) -> Result<()> {
     )?;
 
     ctx.out.emit(
-        format!(
-            "initialized akey\n  device  {device_name}\n  identity  {}\n  repo  {}\n  vault  {}",
+        crate::msg!(
+            "initialized akey\n  device  {}\n  identity  {}\n  repo  {}\n  vault  {}",
+            "已初始化 akey\n  设备  {}\n  身份  {}\n  仓库  {}\n  金库  {}",
+            device_name,
             ctx.paths.identity.display(),
             repo.display(),
             repo.join(VAULT_FILE).display()
@@ -374,8 +377,10 @@ fn init_from_remote(
     audit::record(&ctx.paths, &device_name, Action::Recover, None, "ok")?;
 
     ctx.out.emit(
-        format!(
-            "joined the vault\n  device  {device_name}\n  repo  {}\n  entries  {}",
+        crate::msg!(
+            "joined the vault\n  device  {}\n  repo  {}\n  entries  {}",
+            "已加入金库\n  设备  {}\n  仓库  {}\n  条目  {}",
+            device_name,
             repo.display(),
             vault.entries.len()
         ),
@@ -432,16 +437,25 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
                 .collect();
 
             let human = if rows.is_empty() {
-                "no devices".to_string()
+                crate::msg!("no devices", "没有设备")
             } else {
                 rows.iter()
                     .map(|r| {
+                        let this_device = if r["this_device"].as_bool() == Some(true) {
+                            crate::msg!("  (this device)", "（本设备）")
+                        } else {
+                            String::new()
+                        };
                         format!(
                             "{:<20} {:<8} {}{}",
                             r["name"].as_str().unwrap_or("?"),
-                            if r["active"].as_bool() == Some(true) { "active" } else { "revoked" },
+                            if r["active"].as_bool() == Some(true) {
+                                crate::msg!("active", "有效")
+                            } else {
+                                crate::msg!("revoked", "已吊销")
+                            },
                             r["pubkey"].as_str().unwrap_or(""),
-                            if r["this_device"].as_bool() == Some(true) { "  (this device)" } else { "" },
+                            this_device,
                         )
                     })
                     .collect::<Vec<_>>()
@@ -457,7 +471,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             let name = name.clone().unwrap_or_else(|| store.config.device_name.clone());
             if ctx.dry_run {
                 return ctx.out.emit(
-                    format!("dry run: would re-add this device as '{name}'"),
+                    crate::msg!(
+                        "dry run: would re-add this device as '{}'",
+                        "试运行：会以 '{}' 重新添加本设备",
+                        name
+                    ),
                     &serde_json::json!({ "action": "devices add", "name": name }),
                 );
             }
@@ -477,7 +495,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             git.commit(&format!("akey: re-add device {name}"))?;
             audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
             ctx.out.emit(
-                format!("device '{name}' is now an active, trusted recipient"),
+                crate::msg!(
+                    "device '{}' is now an active, trusted recipient",
+                    "设备 '{}' 现在已是有效且受信任的收件人",
+                    name
+                ),
                 &serde_json::json!({ "name": name, "pubkey": store.identity.pubkey(), "trusted": true }),
             )
         }
@@ -494,7 +516,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             }
             if ctx.dry_run {
                 return ctx.out.emit(
-                    format!("dry run: would revoke '{name}' and re-encrypt the vault"),
+                    crate::msg!(
+                        "dry run: would revoke '{}' and re-encrypt the vault",
+                        "试运行：会吊销 '{}' 并重新加密金库",
+                        name
+                    ),
                     &serde_json::json!({ "action": "devices rm", "name": name }),
                 );
             }
@@ -524,7 +550,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
             audit::record(&ctx.paths, store.identity.name(), Action::DeviceRemove, Some(name), "ok")?;
             ctx.out.emit(
-                format!("revoked '{name}' and re-encrypted the vault"),
+                crate::msg!(
+                    "revoked '{}' and re-encrypted the vault",
+                    "已吊销 '{}' 并重新加密金库",
+                    name
+                ),
                 &serde_json::json!({ "name": name, "reencrypted": true, "pushed": pushed }),
             )
         }
@@ -560,7 +590,7 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: rename device {old} -> {new}"))?;
             ctx.out.emit(
-                format!("renamed '{old}' to '{new}'"),
+                crate::msg!("renamed '{}' to '{}'", "已将 '{}' 重命名为 '{}'", old, new),
                 &serde_json::json!({ "old": old, "new": new }),
             )
         }
@@ -584,7 +614,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             }
             if ctx.dry_run {
                 return ctx.out.emit(
-                    format!("dry run: would trust '{name}' and re-encrypt the vault to it"),
+                    crate::msg!(
+                        "dry run: would trust '{}' and re-encrypt the vault to it",
+                        "试运行：会信任 '{}' 并向其重新加密金库",
+                        name
+                    ),
                     &serde_json::json!({ "action": "devices trust", "name": name, "pubkey": pubkey }),
                 );
             }
@@ -600,7 +634,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             let pushed = matches!(git.push()?, crate::sync::PushOutcome::Pushed);
             audit::record(&ctx.paths, store.identity.name(), Action::DeviceAdd, Some(&name), "ok")?;
             ctx.out.emit(
-                format!("'{name}' is trusted and can now decrypt the vault"),
+                crate::msg!(
+                    "'{}' is trusted and can now decrypt the vault",
+                    "'{}' 已受信任，现在可以解密金库",
+                    name
+                ),
                 &serde_json::json!({ "name": name, "pubkey": pubkey, "newly_trusted": added, "pushed": pushed }),
             )
         }
@@ -617,7 +655,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             }
             if ctx.dry_run {
                 return ctx.out.emit(
-                    format!("dry run: would stop encrypting to '{name}'"),
+                    crate::msg!(
+                        "dry run: would stop encrypting to '{}'",
+                        "试运行：会停止向 '{}' 加密",
+                        name
+                    ),
                     &serde_json::json!({ "action": "devices untrust", "name": name }),
                 );
             }
@@ -631,9 +673,11 @@ pub fn devices(ctx: &Ctx, args: &DevicesArgs) -> Result<()> {
             git.add_paths(SYNCED_FILES)?;
             git.commit(&format!("akey: untrust device {name}"))?;
             ctx.out.emit(
-                format!(
-                    "'{name}' is no longer trusted; it still appears in recipients.json but will \
-                     not receive new ciphertext"
+                crate::msg!(
+                    "'{}' is no longer trusted; it still appears in recipients.json but will \
+                     not receive new ciphertext",
+                    "'{}' 已不再受信任；它仍出现在 recipients.json 中，但不会再收到新的密文",
+                    name
                 ),
                 &serde_json::json!({ "name": name, "pubkey": pubkey, "was_trusted": removed }),
             )
@@ -676,7 +720,10 @@ pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
             set_recovery(ctx, passphrase)?;
             let store = ctx.store()?;
             ctx.out.emit(
-                "recovery passphrase set; this is the only way to attach a new device",
+                crate::msg!(
+                    "recovery passphrase set; this is the only way to attach a new device",
+                    "恢复密码已设置；这是接入新设备的唯一途径"
+                ),
                 &serde_json::json!({ "recovery_file": store.recovery_path() }),
             )
         }
@@ -690,7 +737,7 @@ pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
             git.add_paths(SYNCED_FILES)?;
             git.commit("akey: rotate recovery passphrase")?;
             ctx.out.emit(
-                "recovery passphrase rotated",
+                crate::msg!("recovery passphrase rotated", "恢复密码已轮换"),
                 &serde_json::json!({ "rotated": true }),
             )
         }
@@ -702,7 +749,10 @@ pub fn recovery(ctx: &Ctx, args: &RecoveryArgs) -> Result<()> {
             let ciphertext = paths::read_file(&store.vault_path())?;
             bootstrap.decrypt(&ciphertext)?;
             ctx.out.emit(
-                "recovery passphrase is valid and can unlock this vault",
+                crate::msg!(
+                    "recovery passphrase is valid and can unlock this vault",
+                    "恢复密码有效，可以解开本金库"
+                ),
                 &serde_json::json!({ "valid": true, "created_at": payload.created_at }),
             )
         }
@@ -845,7 +895,11 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
 
             if ctx.dry_run {
                 return ctx.out.emit(
-                    format!("dry run: would issue token '{name}'"),
+                    crate::msg!(
+                        "dry run: would issue token '{}'",
+                        "试运行：会签发令牌 '{}'",
+                        name
+                    ),
                     &serde_json::json!({ "action": "token create", "name": name, "allow": allow }),
                 );
             }
@@ -864,8 +918,10 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             audit::record(&ctx.paths, store.identity.name(), Action::TokenIssue, Some(name), "ok")?;
 
             ctx.out.emit(
-                format!(
-                    "token '{name}' issued — copy it now, it will never be shown again\n{}",
+                crate::msg!(
+                    "token '{}' issued — copy it now, it will never be shown again\n{}",
+                    "令牌 '{}' 已签发——请立即复制，之后不会再显示\n{}",
+                    name,
                     issued.plaintext
                 ),
                 &serde_json::json!({
@@ -899,15 +955,22 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
                 })
                 .collect();
             let human = if rows.is_empty() {
-                "no tokens".to_string()
+                crate::msg!("no tokens", "没有令牌")
             } else {
                 rows.iter()
                     .map(|r| {
                         format!(
-                            "{:<20} {:<8} expires {}",
+                            "{:<20} {:<8} {} {}",
                             r["name"].as_str().unwrap_or("?"),
-                            if r["active"].as_bool() == Some(true) { "active" } else { "inactive" },
-                            r["expires_at"].as_str().unwrap_or("never"),
+                            if r["active"].as_bool() == Some(true) {
+                                crate::msg!("active", "有效")
+                            } else {
+                                crate::msg!("inactive", "无效")
+                            },
+                            crate::i18n::m("expires", "有效期"),
+                            r["expires_at"]
+                                .as_str()
+                                .unwrap_or(crate::i18n::m("never", "永不过期")),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -941,7 +1004,7 @@ pub fn token(ctx: &Ctx, args: &TokenArgs) -> Result<()> {
             git.commit(&format!("akey: revoke token {name}"))?;
             audit::record(&ctx.paths, store.identity.name(), Action::TokenRevoke, Some(name), "ok")?;
             ctx.out.emit(
-                format!("token '{name}' revoked"),
+                crate::msg!("token '{}' revoked", "令牌 '{}' 已吊销", name),
                 &serde_json::json!({ "name": name, "id": id.to_string(), "revoked": true }),
             )
         }
@@ -977,12 +1040,17 @@ pub fn whoami(ctx: &Ctx) -> Result<()> {
     });
 
     ctx.out.emit(
-        format!(
+        crate::msg!(
             "device  {}\npubkey  {}\nrepo  {}\nremote  {}\nentries  {}\n",
+            "设备  {}\n公钥  {}\n仓库  {}\n远端  {}\n条目  {}\n",
             store.config.device_name,
             store.identity.pubkey(),
             store.config.repo.display(),
-            store.config.remote.as_deref().unwrap_or("(none)"),
+            store
+                .config
+                .remote
+                .as_deref()
+                .unwrap_or(crate::i18n::m("(none)", "（无）")),
             vault.live_entries().count(),
         ),
         &data,
@@ -991,28 +1059,50 @@ pub fn whoami(ctx: &Ctx) -> Result<()> {
 
 pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
     let mut checks: Vec<serde_json::Value> = Vec::new();
-    let mut push = |name: &str, status: &str, detail: String| {
+    // The table's detail column is prose and follows `--lang`, while `checks[].detail` is the
+    // machine-readable payload and stays English — the same message rendered twice. `None`
+    // means the detail is a value (a path, a key, an OS error) and reads the same either way.
+    let mut table: Vec<String> = Vec::new();
+    let mut push = |name: &str, status: &str, detail: String, localized: Option<String>| {
+        table.push(format!(
+            "{name:<26} {status:<8} {}",
+            localized.as_deref().unwrap_or(&detail)
+        ));
         checks.push(serde_json::json!({ "name": name, "status": status, "detail": detail }));
     };
 
-    push(
-        "home",
-        "ok",
-        format!("{}", ctx.paths.home.display()),
-    );
+    push("home", "ok", format!("{}", ctx.paths.home.display()), None);
 
     if ctx.paths.has_identity() {
         match paths::permissions_exposed(&ctx.paths.identity) {
-            Ok(false) => push("identity_permissions", "ok", "owner-only".into()),
+            Ok(false) => push(
+                "identity_permissions",
+                "ok",
+                "owner-only".into(),
+                Some(crate::msg!("owner-only", "仅所有者可读")),
+            ),
             Ok(true) => push(
                 "identity_permissions",
                 "error",
                 format!("{} is readable by other users", ctx.paths.identity.display()),
+                Some(crate::msg!(
+                    "{} is readable by other users",
+                    "{} 可被其他用户读取",
+                    ctx.paths.identity.display()
+                )),
             ),
-            Err(e) => push("identity_permissions", "error", e.to_string()),
+            Err(e) => push("identity_permissions", "error", e.to_string(), None),
         }
     } else {
-        push("identity", "error", "no identity.key; run `akey init`".into());
+        push(
+            "identity",
+            "error",
+            "no identity.key; run `akey init`".into(),
+            Some(crate::msg!(
+                "no identity.key; run `akey init`",
+                "没有 identity.key；请运行 `akey init`"
+            )),
+        );
     }
 
     if ctx.paths.has_config()
@@ -1022,9 +1112,19 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
             "config_permissions",
             "error",
             format!("{} is readable by other users", ctx.paths.config.display()),
+            Some(crate::msg!(
+                "{} is readable by other users",
+                "{} 可被其他用户读取",
+                ctx.paths.config.display()
+            )),
         );
     } else if ctx.paths.has_config() {
-        push("config_permissions", "ok", "owner-only".into());
+        push(
+            "config_permissions",
+            "ok",
+            "owner-only".into(),
+            Some(crate::msg!("owner-only", "仅所有者可读")),
+        );
     }
 
     let store = ctx.store()?;
@@ -1033,15 +1133,18 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         "repository",
         if git.is_repo() { "ok" } else { "error" },
         format!("{}", store.repo().display()),
+        None,
     );
+    let remote = store.config.remote.clone();
     push(
         "remote",
-        if store.config.remote.is_some() { "ok" } else { "warning" },
-        store
-            .config
-            .remote
+        if remote.is_some() { "ok" } else { "warning" },
+        remote
             .clone()
             .unwrap_or_else(|| "no remote; vault is local-only".into()),
+        remote
+            .is_none()
+            .then(|| crate::msg!("no remote; vault is local-only", "没有远端；金库仅存在于本地")),
     );
 
     let vault = store.load()?;
@@ -1049,6 +1152,12 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         "vault",
         "ok",
         format!("{} entries, {} tokens", vault.entries.len(), vault.tokens.len()),
+        Some(crate::msg!(
+            "{} entries, {} tokens",
+            "{} 个条目，{} 个令牌",
+            vault.entries.len(),
+            vault.tokens.len()
+        )),
     );
 
     let recipients = store.load_recipients()?;
@@ -1058,6 +1167,7 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         "this_device_is_recipient",
         if active { "ok" } else { "error" },
         mine.to_string(),
+        None,
     );
 
     push(
@@ -1068,11 +1178,24 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         } else {
             "no recovery.age; you cannot attach a new device if this machine is lost".to_string()
         },
+        Some(if store.recovery_path().is_file() {
+            crate::msg!("recovery passphrase configured", "已配置恢复密码")
+        } else {
+            crate::msg!(
+                "no recovery.age; you cannot attach a new device if this machine is lost",
+                "没有 recovery.age；本机丢失后将无法接入新设备"
+            )
+        }),
     );
 
     // A recipient this machine never approved is what a remote-write attacker leaves behind.
     // It cannot decrypt anything, but the user should see it and decide.
     let pending = store.pending_recipients()?;
+    let untrusted = pending
+        .iter()
+        .map(|(name, key)| format!("{name} ({key})"))
+        .collect::<Vec<_>>()
+        .join(", ");
     push(
         "recipients",
         if pending.is_empty() { "ok" } else { "warning" },
@@ -1083,13 +1206,24 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
                 "{} untrusted recipient(s) present (they receive no ciphertext): {} — \
                  `akey devices trust <name>` to approve",
                 pending.len(),
-                pending
-                    .iter()
-                    .map(|(name, key)| format!("{name} ({key})"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                untrusted
             )
         },
+        Some(if pending.is_empty() {
+            crate::msg!(
+                "every recipient in the repository is trusted by this machine",
+                "本机信任仓库中的每一位收件人"
+            )
+        } else {
+            crate::msg!(
+                "{} untrusted recipient(s) present (they receive no ciphertext): {} — \
+                 `akey devices trust <name>` to approve",
+                "存在 {} 位未受信任的收件人（它们收不到密文）：{}——请用 \
+                 `akey devices trust <name>` 批准",
+                pending.len(),
+                untrusted
+            )
+        }),
     );
 
     let now = Utc::now();
@@ -1102,6 +1236,9 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         } else {
             conflicts.join(", ")
         },
+        conflicts
+            .is_empty()
+            .then(|| crate::msg!("none", "无")),
     );
 
     let expired_tokens: Vec<&str> = vault
@@ -1118,6 +1255,11 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         } else {
             format!("inactive: {}", expired_tokens.join(", "))
         },
+        Some(if expired_tokens.is_empty() {
+            crate::msg!("all active", "全部有效")
+        } else {
+            crate::msg!("inactive: {}", "无效：{}", expired_tokens.join(", "))
+        }),
     );
 
     let soon = now + chrono::Duration::days(30);
@@ -1134,24 +1276,16 @@ pub fn doctor(ctx: &Ctx, _args: &DoctorArgs) -> Result<()> {
         } else {
             expiring.join(", ")
         },
+        expiring
+            .is_empty()
+            .then(|| crate::msg!("nothing expiring in 30 days", "30 天内没有条目到期")),
     );
 
     let problems = checks
         .iter()
         .filter(|c| c["status"] == "error")
         .count();
-    let human = checks
-        .iter()
-        .map(|c| {
-            format!(
-                "{:<26} {:<8} {}",
-                c["name"].as_str().unwrap_or("?"),
-                c["status"].as_str().unwrap_or("?"),
-                c["detail"].as_str().unwrap_or(""),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let human = table.join("\n");
 
     ctx.out.emit(
         human,
@@ -1172,7 +1306,7 @@ pub fn log(ctx: &Ctx, args: &LogArgs) -> Result<()> {
         .collect();
 
     let human = if filtered.is_empty() {
-        "no audit records".to_string()
+        crate::msg!("no audit records", "没有审计记录")
     } else {
         filtered
             .iter()
@@ -1246,7 +1380,10 @@ pub fn schema(ctx: &Ctx, _args: &SchemaArgs) -> Result<()> {
     });
 
     ctx.out.emit(
-        "akey schema (use --json for the machine-readable form)",
+        crate::msg!(
+            "akey schema (use --json for the machine-readable form)",
+            "akey schema（使用 --json 获取机器可读形式）"
+        ),
         &data,
     )
 }

@@ -400,9 +400,15 @@ pub fn template(ctx: &Ctx, args: &TemplateArgs) -> Result<()> {
                     "out_file": path.to_string_lossy(),
                     "bytes": rendered.len(),
                 });
-                return ctx
-                    .out
-                    .emit(format!("wrote template for {category} to {}", path.display()), &data);
+                return ctx.out.emit(
+                    crate::msg!(
+                        "wrote template for {} to {}",
+                        "已将 {} 模板写入 {}",
+                        category.as_str(),
+                        path.display()
+                    ),
+                    &data,
+                );
             }
             let rendered = serde_json::to_string_pretty(&value).map_err(json_err)?;
             ctx.out.emit(rendered, &value)
@@ -668,34 +674,36 @@ fn fill_otp(vault: &Vault, view: &mut EntryView, now: DateTime<Utc>) -> Result<(
 }
 
 fn render_entry_human(view: &EntryView) -> String {
+    // Labels only. The `--json` keys are the contract and keep their stable names.
+    let l = |en: &'static str, zh: &'static str| crate::i18n::m(en, zh);
     let mut lines = vec![
-        format!("name: {}", view.name),
-        format!("id: {}", view.id),
-        format!("category: {}", view.category),
+        format!("{}{}", l("name: ", "名称："), view.name),
+        format!("{}{}", l("id: ", "ID："), view.id),
+        format!("{}{}", l("category: ", "分类："), view.category),
     ];
     if let Some(title) = &view.title {
-        lines.push(format!("title: {title}"));
+        lines.push(format!("{}{title}", l("title: ", "标题：")));
     }
     if !view.tags.is_empty() {
-        lines.push(format!("tags: {}", view.tags.join(", ")));
+        lines.push(format!("{}{}", l("tags: ", "标签："), view.tags.join(", ")));
     }
-    lines.push(format!("favorite: {}", view.favorite));
+    lines.push(format!("{}{}", l("favorite: ", "收藏："), view.favorite));
     if let Some(url) = &view.url {
-        lines.push(format!("url: {url}"));
+        lines.push(format!("{}{url}", l("url: ", "URL：")));
     }
     if let Some(notes) = &view.notes {
-        lines.push(format!("notes: {notes}"));
+        lines.push(format!("{}{notes}", l("notes: ", "备注：")));
     }
     if let Some(expires) = view.expires_at {
-        lines.push(format!("expires_at: {expires}"));
+        lines.push(format!("{}{expires}", l("expires_at: ", "过期时间：")));
     }
     if let Some(rotated) = view.rotated_at {
-        lines.push(format!("rotated_at: {rotated}"));
+        lines.push(format!("{}{rotated}", l("rotated_at: ", "轮换时间：")));
     }
     if let Some(deleted) = view.deleted_at {
-        lines.push(format!("deleted_at: {deleted}"));
+        lines.push(format!("{}{deleted}", l("deleted_at: ", "删除时间：")));
     }
-    lines.push(format!("reveal: {}", view.reveal.as_str()));
+    lines.push(format!("{}{}", l("reveal: ", "取明文："), view.reveal.as_str()));
 
     let width = view.fields.iter().map(|f| f.label.len()).max().unwrap_or(0);
     for field in &view.fields {
@@ -713,7 +721,7 @@ fn render_entry_human(view: &EntryView) -> String {
 
 fn render_list_human(rows: &[EntrySummary]) -> String {
     if rows.is_empty() {
-        return "no entries".to_string();
+        return crate::i18n::m("no entries", "没有条目").to_string();
     }
     let name_width = rows.iter().map(|r| r.name.len()).max().unwrap_or(0);
     let cat_width = rows.iter().map(|r| r.category.as_str().len()).max().unwrap_or(0);
@@ -728,10 +736,14 @@ fn render_list_human(rows: &[EntrySummary]) -> String {
                 cat_width = cat_width,
             );
             if !row.tags.is_empty() {
-                line.push_str(&format!("  tags:{}", row.tags.join(",")));
+                line.push_str(&format!(
+                    "  {}{}",
+                    crate::i18n::m("tags:", "标签："),
+                    row.tags.join(",")
+                ));
             }
             if row.favorite {
-                line.push_str("  favorite");
+                line.push_str(&format!("  {}", crate::i18n::m("favorite", "收藏")));
             }
             if let Some(expires) = row.expires_at {
                 line.push_str(&format!("  expires:{expires}"));
@@ -962,8 +974,9 @@ fn warn_argv_secrets_edit(ctx: &Ctx, assignments: &[Assignment], entry: &Entry) 
     if labels.is_empty() {
         return;
     }
-    ctx.out.warn(&format!(
+    ctx.out.warn(&crate::msg!(
         "plaintext for {} came in through argv (visible to `ps` and shell history); prefer --stdin or --template",
+        "{} 的明文来自 argv（`ps` 与 shell 历史可见）；请改用 --stdin 或 --template",
         labels.join(", ")
     ));
 }
@@ -1609,15 +1622,27 @@ impl BatchReport {
         let mut lines: Vec<String> = self
             .results
             .iter()
-            .map(|r| format!("{} '{}'", r.action.replace('_', " "), r.name))
+            .map(|r| {
+                // `action` is a stable wire identifier that also goes into `--json`, so it is
+                // mapped to prose here rather than localized where it is set.
+                let verb = match r.action {
+                    "deleted" => crate::i18n::m("deleted", "已删除"),
+                    "already_deleted" => crate::i18n::m("already deleted", "此前已删除"),
+                    "purged" => crate::i18n::m("purged", "已彻底移除"),
+                    "restored" => crate::i18n::m("restored", "已恢复"),
+                    "already_live" => crate::i18n::m("already live", "本来就是启用状态"),
+                    other => other,
+                };
+                format!("{verb} '{}'", r.name)
+            })
             .collect();
         lines.extend(
             self.failed
                 .iter()
-                .map(|(item, err)| format!("failed '{item}': {err}")),
+                .map(|(item, err)| crate::msg!("failed '{}': {}", "失败 '{}'：{}", item, err)),
         );
         if lines.is_empty() {
-            return "nothing to do".to_string();
+            return crate::i18n::m("nothing to do", "没有要做的事").to_string();
         }
         lines.join("\n")
     }

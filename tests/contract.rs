@@ -995,3 +995,48 @@ fn error_hints_follow_the_language_while_the_code_stays_stable() {
         .to_string();
     assert!(en.contains("see available entries"), "english hint:\n{en}");
 }
+
+/// The scope of the "`--json` does not move" rule, pinned including its single exception.
+///
+/// `akey schema` exists to describe the CLI surface, and its `summary` / `args[].help` fields
+/// *are* the `--help` strings — so it follows `--lang` like help does. Every other payload is
+/// stable, which is the part an agent can rely on when it parses or caches output.
+#[test]
+fn only_schema_json_follows_the_language() {
+    let device = with_entry();
+
+    let schema_en = device.json_ok(&["--lang", "en", "schema"]);
+    let schema_zh = device.json_ok(&["--lang", "zh-CN", "schema"]);
+    assert_ne!(schema_en, schema_zh, "schema descriptions come from --help");
+
+    // Structurally identical: only the prose differs, so an agent's parsing is unaffected.
+    let names = |v: &serde_json::Value| {
+        v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&schema_en), names(&schema_zh));
+
+    // Everything else is byte-identical, which is the guarantee worth having.
+    for args in [
+        vec!["list"],
+        vec!["whoami"],
+        vec!["doctor"],
+        vec!["devices", "list"],
+        vec!["get", "openai"],
+    ] {
+        let mut en = vec!["--lang", "en"];
+        en.extend(args.iter().copied());
+        let mut zh = vec!["--lang", "zh-CN"];
+        zh.extend(args.iter().copied());
+        assert_eq!(
+            device.json_ok(&en),
+            device.json_ok(&zh),
+            "`{}` must not depend on the language",
+            args.join(" ")
+        );
+    }
+}

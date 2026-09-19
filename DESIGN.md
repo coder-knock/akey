@@ -392,4 +392,7 @@ pub struct Msg { en: &'static str, zh_cn: &'static str }
 | 帮助文本（`cli.rs`，clap 属性） | 全量双语 |
 | `Error::hint()`（6 条） | 全量双语 |
 | 错误消息正文 | 英文完整；中文待补——缺翻译时回退英文，不会缺失 |
+| 人类成功输出（`emit` 的首参）、告警、`--debug` 标签、`error:`/`warning:`/`hint:` 框架 | 全量双语 |
 | clap 内建的 `Usage:` / `Options:` 等标签 | clap 自绘，两语言下都是英文（上游无本地化） |
+
+**`--json` 不变式的唯一例外**：`akey schema` 的 `summary` 与 `args[].help` 就是 `--help` 的字符串，因此随 `--lang` 变化。其余所有载荷（`list`／`get`／`doctor`／`whoami`／`devices list`／各 dry-run）逐字节稳定，由 `contract::language_changes_human_text_and_leaves_the_json_contract_untouched` 钉住。
