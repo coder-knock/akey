@@ -878,3 +878,68 @@ fn agent_documentation_covers_every_command() {
         "these commands are missing from the agent-facing docs: {undocumented:?}"
     );
 }
+
+/// FR-3: an agent retries — after a timeout, a crash, a half-read response. Re-running the same
+/// `set` must therefore be a no-op, not a second entry, a duplicated field, or a new timestamp.
+/// A non-idempotent write turns every retry into corruption.
+#[test]
+fn set_repeated_with_the_same_value_is_a_no_op() {
+    let device = with_entry();
+    let before = device.json_ok(&["get", "openai"]);
+
+    for _ in 0..3 {
+        device.set_secret("openai", "credential", CANARY);
+    }
+
+    let after = device.json_ok(&["get", "openai"]);
+    assert_eq!(after["id"], before["id"], "the entry must not be recreated");
+    assert_eq!(after["created_at"], before["created_at"]);
+    assert_eq!(
+        after["updated_at"], before["updated_at"],
+        "writing an identical value is not a change"
+    );
+    assert_eq!(after["fields"], before["fields"], "fields must not accumulate");
+    assert_eq!(device.json_ok(&["list"])["count"], 1);
+}
+
+/// FR-13: `doctor --json` is what an agent reads to decide whether it may proceed. Its shape is
+/// the contract — one record per probe, a status from a closed set, and a human-readable detail.
+/// An unparseable or open-ended status is something an agent cannot branch on.
+#[test]
+fn doctor_json_reports_every_probe_with_a_known_status() {
+    let device = with_entry();
+    let data = device.json_ok(&["doctor"]);
+
+    let checks = data["checks"]
+        .as_array()
+        .expect("doctor must report a list of checks");
+    assert!(!checks.is_empty(), "a doctor that checks nothing is not a doctor");
+
+    let mut names = Vec::new();
+    for check in checks {
+        let name = check["name"].as_str().expect("every check needs a name");
+        let status = check["status"].as_str().expect("every check needs a status");
+        assert!(
+            ["ok", "warning", "error"].contains(&status),
+            "{name} reports an unknown status {status:?}"
+        );
+        assert!(check["detail"].is_string(), "{name} must explain itself");
+        names.push(name);
+    }
+
+    // The probes an agent actually branches on: whether this device can read and write at all,
+    // and whether the vault is in a state it must not ignore.
+    for required in [
+        "identity_permissions",
+        "repository",
+        "remote",
+        "vault",
+        "conflicts",
+        "tokens",
+    ] {
+        assert!(
+            names.contains(&required),
+            "doctor does not report `{required}`; it reported {names:?}"
+        );
+    }
+}

@@ -1321,6 +1321,9 @@ fn apply_set(vault: &mut Vault, plan: &SetPlan, now: DateTime<Utc>) -> Result<Se
     }
     let existing = writable_entry(vault, &plan.name)?;
     let created = existing.is_none();
+    // Snapshot for the change check at the bottom. Taken before the template overlay, so a
+    // `set` that only re-states what is already there counts as no change either.
+    let before = existing.clone();
 
     let mut entry = match (existing, &plan.template) {
         (Some(entry), Some(template)) => {
@@ -1374,7 +1377,13 @@ fn apply_set(vault: &mut Vault, plan: &SetPlan, now: DateTime<Utc>) -> Result<Se
             },
         );
     }
-    entry.updated_at = now;
+    // Only a real change advances the timestamp. `sync` uses `updated_at` to pick a merge
+    // winner and to derive a conflict copy's ID, so stamping a no-op would let a retried `set`
+    // outrank another device's genuine edit — and make the two devices derive different
+    // conflict IDs for the same divergence.
+    if before.as_ref() != Some(&entry) {
+        entry.updated_at = now;
+    }
 
     vault.entries.insert(entry.id, entry.clone());
     Ok(SetOutcome { entry, created })
@@ -1449,6 +1458,9 @@ struct EditOutcome {
 fn apply_edit(vault: &mut Vault, plan: &EditPlan, now: DateTime<Utc>) -> Result<EditOutcome> {
     let mut entry = writable_entry(vault, &plan.item)?
         .ok_or_else(|| Error::not_found(format!("no entry named '{}'", plan.item)))?;
+    // Same rule as `apply_set`: only a real change may move `updated_at`, because that field
+    // decides merge winners and names conflict copies.
+    let before = entry.clone();
 
     if let Some(template) = &plan.template {
         template.overlay(&mut entry);
@@ -1472,7 +1484,9 @@ fn apply_edit(vault: &mut Vault, plan: &EditPlan, now: DateTime<Utc>) -> Result<
         entry.reveal = reveal;
     }
     apply_assignments(&mut entry, &plan.assignments);
-    entry.updated_at = now;
+    if before != entry {
+        entry.updated_at = now;
+    }
 
     vault.entries.insert(entry.id, entry.clone());
     Ok(EditOutcome {

@@ -22,7 +22,7 @@
 | FR-3 | `contract::human_mode_keeps_diagnostics_off_stdout` | C | 诊断绝不污染 stdout（用管道分别抓取） |
 | FR-3 | `contract::exit_codes_match_the_documented_contract` | C | 12 个错误场景各自映射到 2/3/4/5/6/7/8/1 |
 | FR-3 | `contract::commands_never_block_waiting_for_input` | C | 非 TTY 下任何命令不阻塞等待输入（超时即失败） |
-| FR-3 | **未实现** | C | 同 `set` 连跑两次，vault 字节稳定（除时间戳） |
+| FR-3 | `contract::set_repeated_with_the_same_value_is_a_no_op` | C | 同一条 `set` 连跑 3 次：条目 ID、`created_at`、`updated_at` 与字段集合全不变，条目数仍为 1（`vault.age` 的字节稳定性无法断言——age 每次重新随机化密文） |
 | FR-4 暴露控制 | `contract::get_conceals_secrets_and_exposes_references_instead` | C | `get` 输出含 `••••`，且**不含**明文串 |
 | FR-4 | `contract::entry_can_be_pinned_to_deny_reveal` | C | `reveal=deny` 时 `--reveal` 退出 7 |
 | FR-4 | `contract::inject_cannot_route_around_a_global_reveal_ban` | C | `AKEY_NO_REVEAL=1` 下 `--reveal` 退出 7（run 侧另见 `contract::run_refuses_no_masking_while_reveal_is_forbidden`） |
@@ -70,9 +70,9 @@
 | FR-15 | `admin::token_create_shows_plaintext_once_and_list_never_does` | C | `token create` 输出明文一次；`token list` 不含明文 |
 | FR-16 MCP | `contract::mcp_speaks_json_rpc_and_never_returns_values` | C | `mcp` 的 list 工具响应**不含**任何明文值 |
 | FR-17 AGENTS.md | `contract::init_ships_agent_documentation_into_the_vault_repo` | C | 仓库根有 `AGENTS.md` 且含 `akey run` 示例 |
-| FR-13 医生 | **未实现** | C | 输出含 `identity/remote/permissions/conflicts/tokens` 段 |
+| FR-13 医生 | `contract::doctor_json_reports_every_probe_with_a_known_status` | C | `checks` 非空；每项的 `status` ∈ `ok/warning/error` 且有 `detail`；必含 `identity_permissions`、`repository`、`remote`、`vault`、`conflicts`、`tokens` 六项探针 |
 | NFR-5 原子性 | `paths::replacing_a_file_never_exposes_a_partial_state` | U | 写到一半失败 → 原文件完好，无残留临时文件（残留文件检查见 `paths::atomic_write_leaves_no_temp_files_behind`） |
-| NFR-5 | **未实现** | U | 持锁时第二个写操作超时 → `locked` |
+| NFR-5 | `paths::write_lock_times_out_with_locked_while_another_holder_is_active` | U | 另一持有者未释放时，写者在超时后返回 `locked`（退出 4）；释放后可再次取得 |
 | NFR-2 性能 | `store::hot_path_stays_under_100ms_with_a_thousand_entries`（`--ignored`） | U | `get` 单次 < 100ms（10³ 条目 vault） |
 | NFR-9 日志 | `contract::list_never_carries_field_values` | C | 见 §3 的全局断言（无单条聚合用例，由各契约用例与 `audit::log_never_contains_secret_material` 内联断言） |
 
@@ -113,12 +113,12 @@ struct Device { home: TempDir, repo: TempDir, bin: assert_cmd::Command }
 - 不做 UI/快照测试；不做覆盖率数字目标。
 - 不 mock `git`：mock 会掩盖真实的凭据/分叉行为。
 
-## 6. 尚未实现的测试
+## 6. 曾列出、现已补齐的缺口
 
-下表是 §1 中标注 **未实现** 的行：这些行为目前没有任何测试覆盖，这里记下写代码前的原计划名，以及它本该断言什么。
+§1 曾有三行标注 `未实现`：它们是写代码前列出的验收项，但没有任何测试覆盖。现已全部补齐——其中第一项还牵出一个真实缺陷。
 
-| 需求 | 原计划的测试名 | 该断言什么 |
+| 需求 | 测试 | 补齐过程中 |
 |---|---|---|
-| FR-3 信封（幂等 set） | contract::idempotent_set | 同一条 `set` 连跑两次不得产生第二条条目：条目 ID 与 `created_at` 不变（幂等重放）。原计划的"vault 字节稳定"无法断言——age 密文每次都随机化（见 `boxcrypto::encrypting_twice_yields_different_ciphertexts`）；目前只有 `entries::set_creates_then_updates_in_place` 覆盖"第二次 `set` 原地更新"这一半。 |
-| FR-13 医生 | contract::doctor_json | `akey doctor --json` 的输出含 `identity`、`remote`、`permissions`、`conflicts`、`tokens` 各段及各自状态。`doctor` 现在只出现在 `contract::schema_is_machine_readable_and_complete` 的命令表和 `contract::commands_never_block_waiting_for_input` 的不阻塞清单里。 |
-| NFR-5 原子性 | store::lock_excludes | 第一个写者持锁时，第二个写操作在 `LOCK_TIMEOUT`（`src/paths.rs`，10s）后返回 `locked`。`with_write_lock` 已实现该路径，但没有任何测试制造竞争：`paths::write_lock_serialises_and_runs_closure` 只跑了一次闭包。 |
+| FR-3 幂等 set | `contract::set_repeated_with_the_same_value_is_a_no_op` | **发现缺陷**：内容未变的重复写入也会推进 `updated_at`。该字段是 `sync` 裁决合并胜负、以及派生冲突副本 ID 的输入，所以一次重试会让本机陈旧内容赢过对端的真实修改，并让两台设备对同一分歧推导出不同 ID。已改为仅在内容真正变化时推进（`apply_set` / `apply_edit`）。 |
+| FR-13 医生 | `contract::doctor_json_reports_every_probe_with_a_known_status` | 计划写的"五个段"实际实现为命名探针清单（`checks[].name`），文档随之更正。 |
+| NFR-5 锁超时 | `paths::write_lock_times_out_with_locked_while_another_holder_is_active` | `with_write_lock` 的超时此前不可测（`LOCK_TIMEOUT` 是常量）。抽出 `timeout` 参数后，竞争路径可在毫秒级断言。 |
