@@ -56,6 +56,8 @@ src/inject/mask.rs       streaming redaction of child process output
 src/inject/run.rs        env assembly + subprocess execution
 src/cmd/                 one file per command group; `cli.rs` is the source of truth
 assets/AGENTS.vault.md   shipped into every vault repo at `akey init`
+assets/brand/            logo, lockups, icons, README banner — read its README before
+                         recolouring or redrawing the mark
 ```
 
 ## Design constraints worth knowing before you "fix" something

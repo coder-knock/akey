@@ -83,6 +83,19 @@ akey run --bundle prod-env -- ./deploy.sh
 
 ---
 
+## 2.5 语言
+
+所有命令都接受全局 `--lang <tag>`（或 `$AKEY_LANG`）。它只改变**给人看的文字**：`--json`
+在任何语言下逐字节相同，所以请解析 `error.code` 与稳定键名，永远不要匹配那些句子。
+
+唯一例外是 `akey schema`——它的 `summary` 与 `args[].help` 字段**就是** `--help` 的文本，
+因此跟随 `--lang`。其余所有载荷（`list`、`get`、`doctor`、`whoami`、`devices list` 等）
+都是稳定的。如果你要缓存或 diff `schema` 的输出，先钉住 `--lang en`。
+
+如果你出于任何原因要匹配人类可读文本，就先钉住语言——`akey --lang en …`——
+否则用户换一个 locale，就会改变你在匹配的东西。支持 `en` 与 `zh-CN`；
+显式传入其它值时以退出码 2 拒绝。
+
 ## 3. 发现能力：别猜
 
 ```bash
