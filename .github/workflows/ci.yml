@@ -19,7 +19,7 @@ jobs:
         os: [ubuntu-latest, macos-14, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Formatting first: it is the cheapest check and the one most likely to fail on a fresh
       # contribution, so it should not wait behind a full build.
@@ -71,7 +71,7 @@ jobs:
     name: rust 1.88 (MSRV)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the minimum supported toolchain
         run: rustup toolchain install 1.88 --profile minimal
       - name: Build
@@ -86,7 +86,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
