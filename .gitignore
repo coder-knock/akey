@@ -1,6 +1,11 @@
 /target
 .DS_Store
 
+# Local agent-skill bundles (installed with `npx skills`); not part of the crate
+/.agents/
+/.claude/skills/
+/skills-lock.json
+
 # Archify verification sidecars (regenerable: archify visual-check)
 docs/diagrams/*.visual-check.*
 

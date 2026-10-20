@@ -28,15 +28,17 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Build
-        run: cargo build --locked --all-targets
+        run: cargo build --locked --workspace --all-targets
 
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # lib tests run everywhere. The integration suites drive a POSIX shell
       # (`sh -c`, chmod, /dev/null) and are gated to unix; see TESTPLAN.md.
+      # `--workspace` also picks up akey-gui, whose default feature set is pure logic
+      # (gpui stays off in CI: no GPU stack is needed to test the backend).
       - name: Unit tests
-        run: cargo test --locked --lib
+        run: cargo test --locked --workspace --lib
 
       - name: Integration and end-to-end tests
         if: runner.os != 'Windows'
@@ -75,7 +77,7 @@ jobs:
       - name: Install the minimum supported toolchain
         run: rustup toolchain install 1.88 --profile minimal
       - name: Build
-        run: cargo +1.88 build --locked --all-targets
+        run: cargo +1.88 build --locked --workspace --all-targets
 
   # Advisories against the dependency tree. Not part of `test`: this is the one check whose failure
   # is usually not the author's fault, and it should be readable as its own signal.
