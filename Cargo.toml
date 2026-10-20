@@ -1,3 +1,15 @@
+[workspace]
+# The GUI is a **separate workspace member**, not a feature of this crate: `gpui` pulls a
+# Metal/Vulkan/wgpu stack that the CLI must never require.
+#
+# `default-members` is spelled out rather than left to the implicit rule, because the whole
+# point of FR-26 is that a bare `cargo build` / `cargo install` at the root keeps producing
+# exactly the v0.1 CLI — same dependency graph, same binary. The GUI is opt-in:
+# `cargo build -p akey-gui --features gpui`.
+members = ["gui"]
+default-members = ["."]
+resolver = "3"
+
 [package]
 name = "akey"
 version = "0.1.0"
