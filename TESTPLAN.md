@@ -191,6 +191,15 @@ GUI 的渲染层（GPUI）与逻辑层分开编译：`backend` / `model` 不依�
 | FR-32 原生核实 | `agent::a_harness_cli_that_writes_nothing_is_not_believed` | U | CLI 退 0 但配置仍无可用条目 → `harness` 错误 |
 | FR-32 共享 skill | `agent::a_shared_skill_is_counted_once_in_the_install_total` | U | Codex + OpenCode 共用 `~/.agents/skills` 时总数按真实文件计 |
 | FR-32 打印一致 | `agent::printed_snippets_are_byte_identical_to_a_fresh_install` | U | `agent print` 的片段与首次安装写入的字节一致 |
+| FR-32 卸载镜像 | `agent::uninstall_removes_everything_install_wrote_and_is_idempotent` | U | 安装写的内容全部移除；配置文件保留；重跑 `changed=false` |
+| FR-32 卸载共享 skill | `agent::uninstall_deduplicates_a_shared_skill_and_warns_about_it` | U | Codex + OpenCode 共用的 skill 只删一次，行级报告带 `shared_with` |
+| FR-32 卸载全有或全无 | `agent::a_conflict_on_any_harness_stops_the_whole_uninstall` | U | 任一 harness 冲突 → 其他 harness 未被改动；`--force` 后才全部移除 |
+| FR-32 卸载 dry run | `agent::uninstall_dry_run_deletes_nothing` | U | `--dry-run` 报告将移除的文件，磁盘不变 |
+| FR-32 卸载分层 | `agent::uninstall_can_remove_one_layer` | U | `--only mcp` 只删注册，skill 保留 |
+| FR-32 配置移除 | `agent::config::tests::uninstall_preserves_unrelated_settings` | U | 只删 `akey` 条目，注释与无关键保留 |
+| FR-32 配置移除边界 | `agent::config::tests::uninstall_never_rewrites_a_malformed_file` | U | 配置无法解析 → 报错且文件字节不变 |
+| FR-32 skill 移除边界 | `agent::skill::tests::uninstall_requires_force_for_an_unmanaged_skill_and_keeps_foreign_files` | U | 非 akey 的 skill / sidecar 不动，需 `--force` |
 | FR-32 无 vault | `contract::agent_install_works_without_a_vault_and_is_idempotent` | C | 未初始化也可安装；重跑幂等；stdout 仍是单信封 |
-| FR-32 选择 | `contract::agent_install_requires_a_selection` | C | 不点名且无 `--all` → exit 2（`usage`） |
+| FR-32 卸载契约 | `contract::agent_uninstall_removes_only_its_own_artifacts_and_is_idempotent` | C | 只删自己的产物；配置文件保留；重跑 no-op；JSON 键稳定 |
+| FR-32 选择 | `contract::agent_install_requires_a_selection` · `contract::agent_uninstall_requires_a_selection` | C | 不点名且无 `--all` → exit 2（`usage`） |
 | FR-32 文档覆盖 | `contract::agent_documentation_covers_every_command` | C | README 的命令索引包含 `agent` |

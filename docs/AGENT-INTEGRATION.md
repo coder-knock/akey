@@ -204,6 +204,7 @@ harness how to use the vault — with one command:
 akey agent list                         # supported harnesses, ids, scopes, target paths
 akey agent install claude-code codex    # or --all
 akey agent status                       # per-harness MCP + skill state
+akey agent uninstall claude-code        # remove akey's entry + skill, keep the config file
 akey agent print claude                 # exact snippet + skill, writes nothing
 ```
 
@@ -217,6 +218,13 @@ Every selected harness is planned before anything is written, so a corrupt confi
 skill fails the whole run instead of leaving a half-installed set. Matching entries are left alone;
 a differing `akey` entry or a locally modified skill is a conflict, resolved with `--force`. JSON,
 JSONC, TOML, and YAML files are edited structurally, so comments and unrelated keys survive.
+
+`akey agent uninstall` reverses the operation with the same planning rules. It removes only the
+`akey` registration and the skill akey installed — the config file itself is never deleted, and an
+entry that is already gone is a no-op. A differing entry or a skill you edited needs `--force`.
+Codex and OpenCode share `~/.agents/skills/akey`, so removing it for one also removes it for the
+other; the report names the affected harness, and `akey agent install <harness> --only skill` puts
+the document back for one of them.
 
 The registration launches `akey mcp`, so `akey` must be on the harness's `PATH`.
 

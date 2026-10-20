@@ -435,6 +435,8 @@ pub enum AgentCommand {
     Status(AgentStatusArgs),
     #[command(about = i18n::m("Install the MCP server and SKILL.md into one or more harnesses", "把一个或多个 harness 装上 MCP 服务与 SKILL.md"))]
     Install(AgentInstallArgs),
+    #[command(about = i18n::m("Remove the MCP server and SKILL.md from one or more harnesses", "从一个或多个 harness 移除 MCP 服务与 SKILL.md"))]
+    Uninstall(AgentUninstallArgs),
     #[command(about = i18n::m("Print the MCP snippet and SKILL.md without writing anything", "只输出 MCP 片段与 SKILL.md，不写任何文件"))]
     Print(AgentStatusArgs),
 }
@@ -481,6 +483,30 @@ pub struct AgentInstallArgs {
         help = i18n::m("Edit config files directly instead of calling the harness CLI", "直接改配置文件，不调用 harness CLI"),
         long)]
     pub no_native: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentUninstallArgs {
+    #[arg(
+        help = i18n::m("Harness ids (or use --all)", "harness 标识（或使用 --all）"),
+        value_name = "AGENT")]
+    pub agents: Vec<String>,
+    #[arg(
+        help = i18n::m("Remove from every harness that supports the scope", "从支持该范围的全部 harness 移除"),
+        long)]
+    pub all: bool,
+    #[arg(
+        help = i18n::m("Scope to remove from", "要移除的作用域"),
+        long, value_enum, default_value_t = crate::agent::Scope::User)]
+    pub scope: crate::agent::Scope,
+    #[arg(
+        help = i18n::m("Which artifacts to remove", "要移除的产物"),
+        long, value_enum, default_value_t = crate::agent::Only::All)]
+    pub only: crate::agent::Only,
+    #[arg(
+        help = i18n::m("Remove an entry that differs from akey's, or a skill that was edited", "移除与 akey 不同的条目，或被编辑过的 skill"),
+        long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]

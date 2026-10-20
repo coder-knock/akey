@@ -327,8 +327,10 @@ import    --format … [-i F] [--merge]
 mcp
 agent     list | status [AGENT]...
           | install [AGENT]... | --all [--force] [--no-native]
+          | uninstall [AGENT]... | --all [--force]
           | print [AGENT]...
-          # 三个动词都接受 --scope user|project 与 --only all|mcp|skill
+          # status/install/uninstall/print 接受 --scope 与 --only；
+          # install 另有 --force/--no-native，uninstall 另有 --force
 ```
 
 **赋值语句**：`[<section>.]<field>[[<type>]]=<value>`；`<field>` 为已存在字段时改值，否则新建。值为空 → `[delete]` 删除自定义字段。秘密值走 argv 时打印警告并提示用 `--stdin` / `--template`。
@@ -647,9 +649,9 @@ gui/
 |---|---|---|---|
 | 注册表 | `registry.rs` | harness 的 id / 别名 / 作用域 / 配置候选路径 / 格式 / 入口语法 / skill 根 / 原生 CLI | 不知道文件内容如何解析 |
 | 适配器 | `config.rs` | 按格式读取、匹配、规划、结构化写入 JSON/JSONC/TOML/YAML | 不知道 harness 叫什么 |
-| 编排 | `mod.rs` | 选择、原生委派、计划-应用、报告 | 不知道某个具体 agent 的路径 |
+| 编排 | `mod.rs` | 选择、原生委派、计划-应用、安装与卸载报告 | 不知道某个具体 agent 的路径 |
 
-`Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可，不写也能退化为结构化编辑。
+`Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`，移除永远经过 `config::plan_remove` / `config::apply_remove`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可，不写也能退化为结构化编辑。
 
 `McpStyle` 以**语法**命名（`Claude` / `Codex` / `Hermes` / `OpenCode`），不以 agent 命名：新 harness 往往复用已有语法，而同一个 agent 也可能在不同作用域用不同文件。
 
@@ -660,9 +662,11 @@ gui/
 
 skill 目录旁的 `.akey-managed` 记录 `tool`、`version`、`sha256`、`installed_at`。安装时：文档相同 → 内容不动（必要时补写 sidecar）；文档不同但 sidecar 匹配 → 说明是旧版本，可升级；文档被本地改过 → 冲突，必须 `--force`。这样既不覆盖用户的修改，也不把 akey 自己的旧版本当成用户修改。
 
+卸载时镜像同一套判断：文档与 sidecar 都属于 akey → 删除两者；只剩 sidecar（用户删了文档）→ 清理 sidecar；文档存在但被改过、或没有 akey 的 sidecar → 冲突，必须 `--force`。只删 akey 的 sidecar，不碰其他工具的 sidecar。目录只有在删完后为空时才移除，用户放在里面的其他文件会让目录保留。
+
 ### 19.3 计划先于写入
 
-`install` 先对**所有**选中的 harness 做完整规划，任何一个配置损坏或 skill 冲突都会在写第一个字节之前失败。之后才逐个应用。应用阶段仍可能中途失败（例如第二个 harness 的原生 CLI 退出非零），但每个写入器都是幂等的，重跑同一条命令即可收敛。这是有意的取舍：跨文件事务需要日志与回滚，而幂等重跑不需要。
+`install` 与 `uninstall` 都先对**所有**选中的 harness 做完整规划，任何一个配置损坏或 skill 冲突都会在写第一个字节之前失败。之后才逐个应用。应用阶段仍可能中途失败（例如第二个 harness 的原生 CLI 退出非零），但每个写入器都是幂等的，重跑同一条命令即可收敛。这是有意的取舍：跨文件事务需要日志与回滚，而幂等重跑不需要。
 
 ### 19.4 原生 CLI 只负责「新增」
 
@@ -689,15 +693,24 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 
 `user` 写用户主目录，`project` 写当前工作目录（可提交进仓库）。Codex 与 Hermes 只有 user；Claude Code 与 OpenCode 两者都有。
 
+`AKEY_AGENT_HOME` 可覆盖主目录，`HOME` / `USERPROFILE` 是默认值。它**不是** `AKEY_HOME`：后者是 akey 自己的私有目录（`~/.config/akey`），而 harness 配置在真实主目录里。
+
 选择规则区分「默认」与「显式」：
 
 - `status` / `print` 不点名 → 选中所有支持该作用域的 harness，静默跳过不支持的。
 - 点名了 `codex --scope project` → 报错。用户既然打了名字，就需要知道 Codex 没有 project 作用域，而不是安静地什么都不做。
-- `install` 必须点名或传 `--all`。不点名就装进机器上所有 harness，是过于意外的副作用。
+- `install` / `uninstall` 必须点名或传 `--all`。不点名就改动机器上所有 harness，是过于意外的副作用。
 
-`AKEY_AGENT_HOME` 可覆盖主目录，`HOME` / `USERPROFILE` 是默认值。它**不是** `AKEY_HOME`：后者是 akey 自己的私有目录（`~/.config/akey`），而 harness 配置在真实主目录里。
+### 19.7 卸载与共享 skill
 
-### 19.7 新增一个 harness
+`uninstall` 的语义是「移除 akey 写进去的东西」，不是「恢复安装前的备份」：
+
+- 配置里没有 `akey` 条目 → no-op；有且匹配 → 删除该条目；有但内容不同 → 冲突，`--force` 才删。
+- 配置文件本身**永不删除**，只编辑其中的 `akey` 键；清空后的容器（如空的 `mcpServers`）可以留在原处。
+- `SkillState::Modified` / `Unmanaged` 需要 `--force`。缺失的 sidecar 会被顺带清理，避免留下孤儿记录。
+- 共享 skill 只删一次，报告按真实文件去重（Codex + OpenCode 共用 `~/.agents/skills/akey`）；但每个 harness 行会带 `shared_with`，UI 提示删除会影响另一个 harness。删除后用 `akey agent install <harness> --only skill` 可以只把文档装回来。
+
+### 19.8 新增一个 harness
 
 1. 在 `registry.rs` 的 `HARNESSES` 加一行：id、别名、作用域、配置候选、格式、语法、入口 key、skill 根、原生 CLI、文档链接；有原生 CLI 时再在 `native_args` 补一条 `mcp add` 语法。
 2. 配置格式是新的 → 在 `ConfigFormat` 加变体，并在 `config.rs` 补 inspect / draft 两条分支。
@@ -706,7 +719,7 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 
 不需要改 `cmd/agent.rs`，也不需要改报告层。
 
-### 19.8 非目标
+### 19.9 非目标
 
 - **不安装 akey 本身**。二进制从哪来是安装脚本的事。
 - **不管理凭据**。这一层只写配置与文档。

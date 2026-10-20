@@ -129,6 +129,8 @@ value**. It answers "what is there"; `akey run` answers "use it".
 
 If this harness has not been wired up yet, a human can run `akey agent install <harness>` once
 (`--all` for every supported harness). It registers the server above and installs this skill.
+`akey agent uninstall <harness>` is the inverse: it removes only akey's registration and skill and
+leaves the rest of the harness configuration untouched.
 
 ## Working with other devices
 

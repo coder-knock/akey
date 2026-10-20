@@ -106,6 +106,7 @@ akey agent list                        # what is supported, and where files go
 akey agent install --all               # MCP server + skill, everywhere it can
 akey agent install claude-code codex   # or name only the harnesses you use
 akey agent status                      # what is installed, and what drifted
+akey agent uninstall codex             # remove akey's entry and skill again
 akey agent print claude                # exact bytes, writes nothing
 ```
 
@@ -121,8 +122,10 @@ The installer prefers each harness's own CLI (`claude mcp add`, `codex mcp add`,
 is present but fails, the install aborts and points at `--no-native` rather than guessing at a
 half-written config. `--scope project` writes into the current repository instead of your home
 directory, for harnesses that support it. Re-running is idempotent — a conflicting entry or a
-hand-edited skill needs `--force`. Because harnesses launch `akey mcp`, the `akey` binary must stay
-on `PATH`.
+hand-edited skill needs `--force`. `uninstall` is the inverse and just as narrow: it removes only
+akey's entry and skill, never the config file, and treats an already-missing entry as a no-op.
+Codex and OpenCode share `~/.agents/skills/akey`, so removing it for one affects both; the report
+says so. Because harnesses launch `akey mcp`, the `akey` binary must stay on `PATH`.
 
 MCP is metadata-only: it tells an agent what exists and never returns a value. Agents still use
 `akey run` to hand a secret to the child process that needs it.
@@ -230,7 +233,7 @@ PNG or SVG export. Regeneration commands: [docs/diagrams/README.md](docs/diagram
 
 ## Status
 
-**Available now.** The CLI is complete: **239 unit + 53 contract + 11 end-to-end tests**, and the
+**Available now.** The CLI is complete: **295 unit + 59 contract + 11 end-to-end tests**, and the
 GUI carries another **118 logic tests**; `cargo clippy` clean, a ~4 MB static release binary, and a
 worst-case vault read of 54 ms on a 1000-entry vault against a 100 ms budget.
 

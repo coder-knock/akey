@@ -201,6 +201,236 @@ pub fn apply(plan: &Plan) -> Result<()> {
     atomic_write(&plan.path, &plan.contents, plan.mode)
 }
 
+// ---------------------------------------------------------------------------
+// Removal
+// ---------------------------------------------------------------------------
+
+/// What an uninstall would do to one config file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveChange {
+    /// The `akey` entry is present and would be deleted.
+    Removed,
+    /// There is nothing to delete (missing file, or no `akey` entry).
+    Missing,
+}
+
+impl RemoveChange {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RemoveChange::Removed => "removed",
+            RemoveChange::Missing => "missing",
+        }
+    }
+}
+
+/// A planned config removal. Nothing is written until [`apply_remove`] is called.
+///
+/// A config file is never deleted, even when the removal leaves it empty: it may hold
+/// comments, a schema declaration, or settings this adapter does not understand.
+#[derive(Debug, Clone)]
+pub struct RemovePlan {
+    pub path: PathBuf,
+    pub change: RemoveChange,
+    /// Bytes to write. Empty when `change` is [`RemoveChange::Missing`].
+    pub contents: Vec<u8>,
+    pub mode: u32,
+    /// What the removed entry said, when it was not the one akey installs.
+    pub removed_detail: Option<String>,
+}
+
+/// A rendered removal, before it is attributed to a path.
+type RemoveDraft = (RemoveChange, Vec<u8>, Option<String>);
+
+/// Plan the deletion of the `akey` entry from one harness config.
+///
+/// Absence is a no-op, not an error: uninstall is idempotent, and a harness may never have
+/// been configured. A *different* entry named `akey` requires `force`, exactly like install,
+/// so an unrelated server that happens to use the name is not deleted by accident. An
+/// unreadable file aborts: deleting from a document akey cannot parse would be guesswork.
+pub fn plan_remove(
+    harness: &Harness,
+    scope: Scope,
+    home: &Path,
+    cwd: &Path,
+    force: bool,
+) -> Result<RemovePlan> {
+    let path = config_path(harness, scope, home, cwd)?;
+    let mode = match scope {
+        Scope::User => FILE_MODE,
+        Scope::Project => PROJECT_FILE_MODE,
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RemovePlan {
+                path,
+                change: RemoveChange::Missing,
+                contents: Vec::new(),
+                mode,
+                removed_detail: None,
+            });
+        }
+        Err(err) => {
+            return Err(Error::corrupt(format!(
+                "cannot read {}: {err}",
+                path.display()
+            )));
+        }
+    };
+
+    if text.trim().is_empty() {
+        return Ok(RemovePlan {
+            path,
+            change: RemoveChange::Missing,
+            contents: Vec::new(),
+            mode,
+            removed_detail: None,
+        });
+    }
+
+    let draft = match harness.format {
+        ConfigFormat::Json => remove_json(harness, &path, &text, force)?,
+        ConfigFormat::Toml => remove_toml(harness, &path, &text, force)?,
+        ConfigFormat::Yaml => remove_yaml(harness, &path, &text, force)?,
+    };
+
+    Ok(RemovePlan {
+        path,
+        change: draft.0,
+        contents: draft.1,
+        mode,
+        removed_detail: draft.2,
+    })
+}
+
+/// Write a planned removal atomically. A missing entry is a no-op.
+pub fn apply_remove(plan: &RemovePlan) -> Result<()> {
+    if plan.change == RemoveChange::Missing {
+        return Ok(());
+    }
+    atomic_write(&plan.path, &plan.contents, plan.mode)
+}
+
+fn remove_json(harness: &Harness, path: &Path, text: &str, force: bool) -> Result<RemoveDraft> {
+    let root = CstRootNode::parse(text, &ParseOptions::default())
+        .map_err(|err| corrupt(path, err.to_string()))?;
+    let Some(object) = root.object_value() else {
+        return Err(corrupt(path, "the top-level value is not an object"));
+    };
+    let Some(servers) = object.object_value(harness.key) else {
+        if object.get(harness.key).is_some() {
+            return Err(corrupt(path, format!("`{}` is not an object", harness.key)));
+        }
+        return Ok((RemoveChange::Missing, Vec::new(), None));
+    };
+    let Some(prop) = servers.get("akey") else {
+        return Ok((RemoveChange::Missing, Vec::new(), None));
+    };
+    let view = prop
+        .value()
+        .and_then(|value| value.to_serde_value())
+        .map(|value| json_entry_view(&value))
+        .unwrap_or_default();
+    let removed_detail = removal_guard(harness, path, classify(harness, view), force)?;
+
+    prop.remove();
+    Ok((
+        RemoveChange::Removed,
+        finish(root.to_string()),
+        removed_detail,
+    ))
+}
+
+fn remove_toml(harness: &Harness, path: &Path, text: &str, force: bool) -> Result<RemoveDraft> {
+    let mut doc: DocumentMut = text
+        .parse()
+        .map_err(|err: toml_edit::TomlError| corrupt(path, err.to_string()))?;
+    let Some(item) = doc.as_table().get(harness.key) else {
+        return Ok((RemoveChange::Missing, Vec::new(), None));
+    };
+    let Some(servers) = item.as_table_like() else {
+        return Err(corrupt(path, format!("`{}` is not a table", harness.key)));
+    };
+    let Some(entry) = servers.get("akey") else {
+        return Ok((RemoveChange::Missing, Vec::new(), None));
+    };
+    let removed_detail = removal_guard(
+        harness,
+        path,
+        classify(harness, toml_entry_view(entry)),
+        force,
+    )?;
+
+    let Some(servers) = doc
+        .as_table_mut()
+        .get_mut(harness.key)
+        .and_then(Item::as_table_like_mut)
+    else {
+        return Err(corrupt(path, format!("`{}` is not a table", harness.key)));
+    };
+    servers.remove("akey");
+    Ok((
+        RemoveChange::Removed,
+        finish(doc.to_string()),
+        removed_detail,
+    ))
+}
+
+fn remove_yaml(harness: &Harness, path: &Path, text: &str, force: bool) -> Result<RemoveDraft> {
+    let doc = Document::from_str(text).map_err(|err| corrupt(path, err.to_string()))?;
+    let Some(servers) = doc.get(harness.key) else {
+        return Ok((RemoveChange::Missing, Vec::new(), None));
+    };
+    let Some(servers) = servers.as_mapping() else {
+        return Err(corrupt(path, format!("`{}` is not a mapping", harness.key)));
+    };
+    let Some(entry) = servers.get("akey") else {
+        return Ok((RemoveChange::Missing, Vec::new(), None));
+    };
+    let removed_detail = removal_guard(
+        harness,
+        path,
+        classify(harness, yaml_entry_view(&entry)),
+        force,
+    )?;
+
+    doc.try_remove_path(&format!("{}.akey", harness.key))
+        .map_err(|err| corrupt(path, err.to_string()))?;
+    Ok((
+        RemoveChange::Removed,
+        finish(doc.to_string()),
+        removed_detail,
+    ))
+}
+
+/// Allow a removal, or refuse one that would delete an entry akey does not own.
+fn removal_guard(
+    harness: &Harness,
+    path: &Path,
+    status: EntryStatus,
+    force: bool,
+) -> Result<Option<String>> {
+    match status {
+        EntryStatus::Installed => Ok(None),
+        EntryStatus::Conflict { detail } => {
+            if !force {
+                return Err(Error::AgentConflict(format!(
+                    "{} has a different `akey` MCP entry in {}: {}; \
+                     rerun with `--force` to remove it",
+                    harness.display,
+                    path.display(),
+                    detail
+                )));
+            }
+            Ok(Some(detail))
+        }
+        // `classify` never returns these; a missing entry is handled by the caller and an
+        // unreadable one by the parser before this point.
+        EntryStatus::Missing => Ok(None),
+        EntryStatus::Unreadable { detail } => Err(corrupt(path, detail)),
+    }
+}
+
 /// A paste-ready fragment showing exactly what a fresh config would receive.
 ///
 /// This is rendered through the same planner used for real installs, so the snippet cannot
@@ -919,6 +1149,227 @@ mod tests {
                 harness.id
             );
         }
+    }
+
+    fn remove_for(harness: &Harness, home: &Path, cwd: &Path, force: bool) -> Result<RemovePlan> {
+        plan_remove(harness, Scope::User, home, cwd, force)
+    }
+
+    #[test]
+    fn uninstall_removes_only_the_akey_entry_for_every_harness() {
+        for harness in registry::harnesses() {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path();
+            install(harness, home, temp.path());
+
+            let plan = remove_for(harness, home, temp.path(), false).unwrap();
+            assert_eq!(
+                plan.change,
+                RemoveChange::Removed,
+                "{} must plan a removal",
+                harness.id
+            );
+            apply_remove(&plan).unwrap();
+
+            assert!(
+                plan.path.is_file(),
+                "{} uninstall must keep the config file",
+                harness.id
+            );
+            assert_eq!(
+                inspect(harness, Scope::User, home, temp.path())
+                    .unwrap()
+                    .status,
+                EntryStatus::Missing,
+                "{} must inspect as missing\n{}",
+                harness.id,
+                std::fs::read_to_string(&plan.path).unwrap()
+            );
+
+            // Uninstall is idempotent: a second pass is a no-op and drops no bytes.
+            let again = remove_for(harness, home, temp.path(), false).unwrap();
+            assert_eq!(again.change, RemoveChange::Missing, "{}", harness.id);
+            assert!(again.contents.is_empty(), "{}", harness.id);
+        }
+    }
+
+    #[test]
+    fn uninstall_preserves_unrelated_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+
+        std::fs::write(
+            home.join(".claude.json"),
+            "{\n  // keep this comment\n  \"theme\": \"dark\",\n  \"mcpServers\": {\n    \"other\": { \"command\": \"other\" }\n  }\n}\n",
+        )
+        .unwrap();
+        install(harness("claude"), home, temp.path());
+        let plan = remove_for(harness("claude"), home, temp.path(), false).unwrap();
+        apply_remove(&plan).unwrap();
+        let text = std::fs::read_to_string(home.join(".claude.json")).unwrap();
+        assert!(text.contains("keep this comment"), "{text}");
+        assert!(text.contains("\"theme\""), "{text}");
+        assert!(text.contains("\"other\""), "{text}");
+        assert!(!text.contains("\"akey\""), "{text}");
+
+        write_config(
+            &home.join(".codex/config.toml"),
+            "# keep this comment\n[mcp_servers.other]\ncommand = \"other\"\n",
+        );
+        install(harness("codex"), home, temp.path());
+        let plan = remove_for(harness("codex"), home, temp.path(), false).unwrap();
+        apply_remove(&plan).unwrap();
+        let text = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(text.contains("keep this comment"), "{text}");
+        assert!(text.contains("[mcp_servers.other]"), "{text}");
+        assert!(!text.contains("[mcp_servers.akey]"), "{text}");
+
+        write_config(
+            &home.join(".hermes/config.yaml"),
+            "model: hermes-3\nmcp_servers:\n  other:\n    command: other\n",
+        );
+        install(harness("hermes"), home, temp.path());
+        let plan = remove_for(harness("hermes"), home, temp.path(), false).unwrap();
+        apply_remove(&plan).unwrap();
+        let text = std::fs::read_to_string(home.join(".hermes/config.yaml")).unwrap();
+        assert!(text.contains("model: hermes-3"), "{text}");
+        assert!(text.contains("other:"), "{text}");
+        assert!(!text.contains("akey:"), "{text}");
+
+        write_config(
+            &home.join(".config/opencode/opencode.json"),
+            r#"{"$schema":"https://opencode.ai/config.json","mcp":{"other":{"type":"local","command":["other"]}}}"#,
+        );
+        install(harness("opencode"), home, temp.path());
+        let plan = remove_for(harness("opencode"), home, temp.path(), false).unwrap();
+        apply_remove(&plan).unwrap();
+        let text = std::fs::read_to_string(home.join(".config/opencode/opencode.json")).unwrap();
+        assert!(text.contains("$schema"), "{text}");
+        assert!(text.contains("\"other\""), "{text}");
+        assert!(!text.contains("\"akey\""), "{text}");
+    }
+
+    #[test]
+    fn uninstall_tolerates_a_missing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let plan = remove_for(harness("claude"), home, temp.path(), false).unwrap();
+        assert_eq!(plan.change, RemoveChange::Missing);
+        apply_remove(&plan).unwrap();
+        assert!(!home.join(".claude.json").exists());
+    }
+
+    #[test]
+    fn uninstall_requires_force_for_a_different_entry_and_force_removes_it() {
+        let fixtures = [
+            (
+                "claude",
+                ".claude.json",
+                r#"{"mcpServers":{"akey":{"type":"stdio","command":"other","args":["mcp"]}}}"#,
+            ),
+            (
+                "codex",
+                ".codex/config.toml",
+                "[mcp_servers.akey]\ncommand = \"other\"\n",
+            ),
+            (
+                "hermes",
+                ".hermes/config.yaml",
+                "mcp_servers:\n  akey:\n    command: other\n    args: [mcp]\n",
+            ),
+            (
+                "opencode",
+                ".config/opencode/opencode.json",
+                r#"{"mcp":{"akey":{"type":"local","command":["other","mcp"]}}}"#,
+            ),
+        ];
+
+        for (id, relative, text) in fixtures {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path();
+            write_config(&home.join(relative), text);
+            let harness = harness(id);
+
+            let err = remove_for(harness, home, temp.path(), false).unwrap_err();
+            assert!(matches!(err, Error::AgentConflict(_)), "{id}: {err:?}");
+            assert!(err.to_string().contains("--force"), "{id}: {err}");
+            assert_eq!(
+                std::fs::read_to_string(home.join(relative)).unwrap(),
+                text,
+                "{id} must be untouched without --force"
+            );
+
+            let forced = remove_for(harness, home, temp.path(), true).unwrap();
+            assert_eq!(forced.change, RemoveChange::Removed, "{id}");
+            assert!(forced.removed_detail.is_some(), "{id}");
+            apply_remove(&forced).unwrap();
+            assert_eq!(
+                inspect(harness, Scope::User, home, temp.path())
+                    .unwrap()
+                    .status,
+                EntryStatus::Missing,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn uninstall_force_removes_a_non_server_value() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+
+        std::fs::write(
+            home.join(".claude.json"),
+            r#"{"mcpServers":{"akey":7},"theme":"dark"}"#,
+        )
+        .unwrap();
+        let err = remove_for(harness("claude"), home, temp.path(), false).unwrap_err();
+        assert!(matches!(err, Error::AgentConflict(_)), "{err:?}");
+        let forced = remove_for(harness("claude"), home, temp.path(), true).unwrap();
+        apply_remove(&forced).unwrap();
+        let text = std::fs::read_to_string(home.join(".claude.json")).unwrap();
+        assert!(!text.contains("\"akey\""), "{text}");
+        assert!(text.contains("theme"), "{text}");
+
+        write_config(
+            &home.join(".codex/config.toml"),
+            "[mcp_servers]\nakey = 7\n",
+        );
+        assert!(matches!(
+            remove_for(harness("codex"), home, temp.path(), false).unwrap_err(),
+            Error::AgentConflict(_)
+        ));
+        let forced = remove_for(harness("codex"), home, temp.path(), true).unwrap();
+        apply_remove(&forced).unwrap();
+        let text = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(!text.contains("akey"), "{text}");
+
+        write_config(
+            &home.join(".hermes/config.yaml"),
+            "mcp_servers:\n  akey: 7\n",
+        );
+        assert!(matches!(
+            remove_for(harness("hermes"), home, temp.path(), false).unwrap_err(),
+            Error::AgentConflict(_)
+        ));
+        let forced = remove_for(harness("hermes"), home, temp.path(), true).unwrap();
+        apply_remove(&forced).unwrap();
+        let text = std::fs::read_to_string(home.join(".hermes/config.yaml")).unwrap();
+        assert!(!text.contains("akey"), "{text}");
+    }
+
+    #[test]
+    fn uninstall_never_rewrites_a_malformed_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        std::fs::write(home.join(".claude.json"), "{ not json").unwrap();
+
+        let err = remove_for(harness("claude"), home, temp.path(), true).unwrap_err();
+        assert!(matches!(err, Error::Corrupt(_)), "{err:?}");
+        assert_eq!(
+            std::fs::read_to_string(home.join(".claude.json")).unwrap(),
+            "{ not json"
+        );
     }
 
     #[test]

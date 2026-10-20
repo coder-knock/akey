@@ -143,8 +143,8 @@ impl Error {
                 "先运行 `akey conflicts`，再 `akey resolve <name> --ours|--theirs`",
             )),
             Error::AgentConflict(_) => Some(crate::i18n::m(
-                "rerun with `--force` to replace the existing entry, or remove it in the harness config",
-                "加 `--force` 重新运行以替换现有条目，或在 harness 配置里手动删除",
+                "rerun with `--force` to overwrite or remove it, or edit the harness config",
+                "加 `--force` 重新运行以覆盖或移除，或直接修改 harness 配置",
             )),
             Error::Harness(_) => Some(crate::i18n::m(
                 "rerun with `--no-native` to edit the harness config directly",

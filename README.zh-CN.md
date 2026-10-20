@@ -102,6 +102,7 @@ akey agent list                        # 支持哪些 harness，文件会落到�
 akey agent install --all               # 能装的都装上 MCP server + skill
 akey agent install claude-code codex   # 或者只点名你要用的
 akey agent status                      # 装了什么，哪里漂移了
+akey agent uninstall codex             # 再次移除 akey 的条目与 skill
 akey agent print claude                # 打印准确内容，不写任何文件
 ```
 
@@ -116,7 +117,10 @@ akey agent print claude                # 打印准确内容，不写任何文件
 `opencode mcp add`），CLI 未安装时直接改配置文件。若 CLI 存在但执行失败，安装会中止并提示改用
 `--no-native`，而不是在一个可能写了一半的配置上继续猜。`--scope project` 写进当前仓库而不是
 主目录，仅对支持该作用域的 harness 生效。重复执行是幂等的——已存在的冲突条目或被手工改过的
-skill 需要 `--force`。因为 harness 启动的是 `akey mcp`，`akey` 二进制必须留在 `PATH` 上。
+skill 需要 `--force`。`uninstall` 是同样克制的反向操作：只删 akey 自己的条目与 skill，绝不删
+配置文件；条目本就不存在时视为 no-op。Codex 与 OpenCode 共用 `~/.agents/skills/akey`，为其中
+一个卸载会同时影响另一个，报告会明确提示。因为 harness 启动的是 `akey mcp`，`akey` 二进制
+必须留在 `PATH` 上。
 
 MCP 只提供元数据：它告诉 agent 有什么，永不返回值。真正使用密钥仍然走 `akey run`，
 把值交给需要它的子进程。
@@ -215,7 +219,7 @@ akey --lang zh-CN list     # 显式指定；也可用 AKEY_LANG=zh-CN，或 $LC_
 
 ## 状态
 
-**当前可用。** CLI 完整：**239 单元 + 53 契约 + 11 端到端测试**，GUI 另有 **118 个逻辑测试**；
+**当前可用。** CLI 完整：**295 单元 + 59 契约 + 11 端到端测试**，GUI 另有 **118 个逻辑测试**；
 `cargo clippy` 零警告，release 静态二进制约 4 MB，1000 条目金库的最差读取 54 ms（预算 100 ms）。
 
 **平台支持。** macOS 与 Linux 有端到端覆盖。Windows 能编译、单元测试通过，发布流程也为它产出

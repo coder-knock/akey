@@ -186,6 +186,7 @@ akey run --with OTP=akey://github/one-time-password?attribute=otp -- ./login.sh
 akey agent list                         # 支持的 harness、id、作用域、目标路径
 akey agent install claude-code codex    # 或者 --all
 akey agent status                       # 每个 harness 的 MCP + skill 状态
+akey agent uninstall claude-code        # 移除 akey 的条目与 skill，配置文件保留
 akey agent print claude                 # 打印准确内容，不写任何文件
 ```
 
@@ -197,6 +198,12 @@ OpenCode（`opencode`）。其中 `claude-code` 与 `opencode` 还支持 `--scop
 所有选中的 harness 会先全部规划、再开始写，因此某个配置损坏或 skill 冲突会让整次安装失败，
 而不会留下装了一半的状态。已匹配的条目原样保留；`akey` 条目内容不同、或 skill 被本地改过，
 都算冲突，用 `--force` 覆盖。JSON、JSONC、TOML、YAML 都是结构化编辑，注释与无关键不会丢。
+
+`akey agent uninstall` 用同一套规划规则反向操作：只删 akey 的注册与它装进去的 skill，
+**不删除配置文件本身**；条目本就不存在时是 no-op。内容不同的条目或被手工改过的 skill 需要
+`--force`。Codex 与 OpenCode 共用 `~/.agents/skills/akey`，为其中一个卸载会同时移除另一个的
+文档；报告会点名受影响的 harness，之后可用 `akey agent install <harness> --only skill`
+单独把文档装回来。
 
 注册信息启动的是 `akey mcp`，所以 `akey` 必须在 harness 的 `PATH` 上。
 

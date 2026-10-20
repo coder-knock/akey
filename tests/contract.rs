@@ -1363,6 +1363,83 @@ fn agent_install_works_without_a_vault_and_is_idempotent() {
     assert_eq!(status["ready"], true);
 }
 
+/// Uninstall is the mirror of install: it edits config files but never deletes them, and a
+/// second run is a no-op rather than an error.
+#[test]
+fn agent_uninstall_removes_only_its_own_artifacts_and_is_idempotent() {
+    let device = Device::blank();
+    device.json_ok(&["agent", "install", "claude-code", "--no-native"]);
+
+    let first = device.json_ok(&["agent", "uninstall", "claude-code"]);
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["removed"], 3, "config + SKILL.md + sidecar");
+    let row = &first["harnesses"][0];
+    assert_eq!(row["id"], "claude-code");
+    assert_eq!(row["mcp"]["change"], "removed");
+    assert_eq!(row["skill"]["change"], "removed");
+    assert_eq!(row["skill"]["removed_dir"], true);
+
+    assert!(
+        device.home_path().join(".claude.json").is_file(),
+        "uninstall must keep the config file"
+    );
+    assert!(!device.home_path().join(".claude/skills/akey").exists());
+
+    let second = device.json_ok(&["agent", "uninstall", "claude-code"]);
+    assert_eq!(second["changed"], false);
+    assert_eq!(second["removed"], 0);
+    assert_eq!(second["harnesses"][0]["mcp"]["change"], "missing");
+    assert_eq!(second["harnesses"][0]["skill"]["change"], "missing");
+
+    let status = device.json_ok(&["agent", "status", "claude-code"]);
+    assert_eq!(status["ready"], false);
+    assert_eq!(status["harnesses"][0]["mcp"]["status"], "missing");
+}
+
+/// `--only` must let a user keep the skill while dropping the server (or the reverse).
+#[test]
+fn agent_uninstall_can_target_one_layer() {
+    let device = Device::blank();
+    device.json_ok(&["agent", "install", "opencode", "--no-native"]);
+
+    let report = device.json_ok(&["agent", "uninstall", "opencode", "--only", "mcp"]);
+    assert_eq!(report["removed"], 1);
+    assert_eq!(report["only"], "mcp");
+    assert_eq!(report["harnesses"][0]["mcp"]["change"], "removed");
+    assert!(report["harnesses"][0].get("skill").is_none());
+    assert!(
+        device
+            .home_path()
+            .join(".config/opencode/opencode.json")
+            .is_file()
+    );
+    assert!(
+        device
+            .home_path()
+            .join(".agents/skills/akey/SKILL.md")
+            .is_file()
+    );
+}
+
+#[test]
+fn agent_uninstall_dry_run_deletes_nothing() {
+    let device = Device::blank();
+    device.json_ok(&["agent", "install", "claude-code", "--no-native"]);
+
+    let report = device.json_ok(&["--dry-run", "agent", "uninstall", "claude-code"]);
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["changed"], true);
+    assert!(
+        device
+            .home_path()
+            .join(".claude/skills/akey/SKILL.md")
+            .is_file()
+    );
+
+    let status = device.json_ok(&["agent", "status", "claude-code"]);
+    assert_eq!(status["ready"], true);
+}
+
 /// Naming no harness is a typo far more often than a request to install everywhere. The
 /// refusal must be a usage error, not a silent `--all`.
 #[test]
@@ -1374,6 +1451,20 @@ fn agent_install_requires_a_selection() {
 
     let (code, error, _) =
         device.expect_failure(&["agent", "install", "claude-code", "--all", "--no-native"]);
+    assert_eq!(code, 2);
+    assert_eq!(error, "usage");
+}
+
+/// Uninstall deletes files outside the vault, so it follows the same rule: an explicit
+/// harness name or `--all`, never a guess.
+#[test]
+fn agent_uninstall_requires_a_selection() {
+    let device = Device::blank();
+    let (code, error, _) = device.expect_failure(&["agent", "uninstall"]);
+    assert_eq!(code, 2);
+    assert_eq!(error, "usage");
+
+    let (code, error, _) = device.expect_failure(&["agent", "uninstall", "codex", "--all"]);
     assert_eq!(code, 2);
     assert_eq!(error, "usage");
 }

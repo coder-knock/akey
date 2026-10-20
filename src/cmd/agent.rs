@@ -7,8 +7,10 @@
 
 use std::path::PathBuf;
 
-use crate::agent::{self, InstallRequest, NativeMode, PrintRequest, StatusRequest};
-use crate::cli::{AgentArgs, AgentCommand, AgentInstallArgs, AgentStatusArgs};
+use crate::agent::{
+    self, InstallRequest, NativeMode, PrintRequest, StatusRequest, UninstallRequest,
+};
+use crate::cli::{AgentArgs, AgentCommand, AgentInstallArgs, AgentStatusArgs, AgentUninstallArgs};
 use crate::error::{Error, Result};
 
 use super::Ctx;
@@ -22,6 +24,7 @@ pub fn run(ctx: &Ctx, args: &AgentArgs) -> Result<()> {
         }
         AgentCommand::Status(args) => status(ctx, args),
         AgentCommand::Install(args) => install(ctx, args),
+        AgentCommand::Uninstall(args) => uninstall(ctx, args),
         AgentCommand::Print(args) => print(ctx, args),
     }
 }
@@ -43,7 +46,7 @@ fn status(ctx: &Ctx, args: &AgentStatusArgs) -> Result<()> {
 }
 
 fn install(ctx: &Ctx, args: &AgentInstallArgs) -> Result<()> {
-    let selection = install_selection(args)?;
+    let selection = required_selection(args.all, &args.agents)?;
     // A capability token is read-only, and installing writes outside the vault. Dry runs
     // never touch the filesystem, so they remain usable for inspection.
     if !ctx.dry_run {
@@ -58,6 +61,26 @@ fn install(ctx: &Ctx, args: &AgentInstallArgs) -> Result<()> {
         force: args.force,
         dry_run: ctx.dry_run,
         native: native(args.no_native),
+        home: &home,
+        cwd: &cwd,
+    })?;
+    let human = report.render(&home);
+    ctx.out.emit(human, &report)
+}
+
+fn uninstall(ctx: &Ctx, args: &AgentUninstallArgs) -> Result<()> {
+    let selection = required_selection(args.all, &args.agents)?;
+    if !ctx.dry_run {
+        ctx.gate_write()?;
+    }
+    let home = home()?;
+    let cwd = cwd()?;
+    let report = agent::uninstall(&UninstallRequest {
+        selection: &selection,
+        scope: args.scope,
+        only: args.only,
+        force: args.force,
+        dry_run: ctx.dry_run,
         home: &home,
         cwd: &cwd,
     })?;
@@ -80,24 +103,24 @@ fn print(ctx: &Ctx, args: &AgentStatusArgs) -> Result<()> {
     ctx.out.emit(human, &report)
 }
 
-/// `install` is the one verb that writes, so it is also the one verb that refuses to
-/// guess: naming no harness is almost always a typo, and silently installing into every
-/// harness on the machine would be a surprising side effect. `--all` makes it explicit.
-fn install_selection(args: &AgentInstallArgs) -> Result<agent::Selection> {
-    if args.all && !args.agents.is_empty() {
+/// The verbs that change the machine (`install`, `uninstall`) refuse to guess: naming no
+/// harness is almost always a typo, and silently touching every harness would be a
+/// surprising side effect. `--all` makes the intent explicit.
+fn required_selection(all: bool, agents: &[String]) -> Result<agent::Selection> {
+    if all && !agents.is_empty() {
         return Err(Error::usage(crate::msg!(
             "pass either harness names or `--all`, not both",
             "请只传 harness 名称或 `--all`，不要同时传"
         )));
     }
-    if !args.all && args.agents.is_empty() {
+    if !all && agents.is_empty() {
         return Err(Error::usage(crate::msg!(
             "name at least one harness or pass `--all` (supported: {})",
             "请指定至少一个 harness 或加 `--all`（支持：{}）",
             agent::supported_ids()
         )));
     }
-    agent::select(&args.agents)
+    agent::select(agents)
 }
 
 fn native(no_native: bool) -> NativeMode<'static> {

@@ -215,6 +215,183 @@ pub fn apply(plan: &Plan) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Removal
+// ---------------------------------------------------------------------------
+
+/// What an uninstall would do to one harness skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveChange {
+    /// `SKILL.md` (and any sidecar) would be deleted.
+    Removed,
+    /// Only a stale management sidecar would be deleted; the document was already gone.
+    Cleaned,
+    /// Nothing to delete.
+    Missing,
+}
+
+impl RemoveChange {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RemoveChange::Removed => "removed",
+            RemoveChange::Cleaned => "cleaned",
+            RemoveChange::Missing => "missing",
+        }
+    }
+}
+
+/// A planned skill removal. Nothing is deleted until [`apply_remove`] is called.
+#[derive(Debug, Clone)]
+pub struct RemovePlan {
+    /// Directory that holds the skill (`.../skills/akey`).
+    pub dir: PathBuf,
+    pub path: PathBuf,
+    pub record_path: PathBuf,
+    pub change: RemoveChange,
+    pub remove_skill: bool,
+    pub remove_record: bool,
+    /// Whether the directory is expected to be empty afterwards and can be deleted.
+    pub remove_dir: bool,
+    /// Why a modified or unmanaged file is being deleted.
+    pub detail: Option<String>,
+}
+
+/// Plan the removal of one harness skill.
+///
+/// Absence is a no-op. A modified or unmanaged `SKILL.md` requires `force`, mirroring
+/// install: akey must not delete a document it cannot prove it wrote. A sidecar is only
+/// removed when it belongs to akey, so another tool's bookkeeping survives.
+pub fn plan_remove(
+    harness: &Harness,
+    scope: Scope,
+    home: &Path,
+    cwd: &Path,
+    force: bool,
+) -> Result<RemovePlan> {
+    let dir = skill_dir(harness, scope, home, cwd)?;
+    let path = dir.join(FILE_NAME);
+    let record_path = dir.join(SIDECAR_NAME);
+
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(Error::corrupt(format!(
+                "cannot read {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    let record = current_record(&record_path);
+
+    let (change, remove_skill, detail) = match existing {
+        None => match record {
+            Some(_) => (RemoveChange::Cleaned, false, None),
+            None => (RemoveChange::Missing, false, None),
+        },
+        Some(bytes) => {
+            let detail = match classify(&dir, &bytes) {
+                SkillState::Current | SkillState::Outdated { .. } => None,
+                SkillState::Modified { version } => {
+                    let detail = match version {
+                        Some(version) => format!(
+                            "{} was edited after akey {version} installed it",
+                            path.display()
+                        ),
+                        None => format!("{} was edited after akey installed it", path.display()),
+                    };
+                    guard_remove(harness, detail, force)?
+                }
+                SkillState::Unmanaged => guard_remove(
+                    harness,
+                    format!(
+                        "{} already exists and was not installed by akey",
+                        path.display()
+                    ),
+                    force,
+                )?,
+                SkillState::Unreadable { detail } => {
+                    return Err(Error::corrupt(format!("{}: {detail}", path.display())));
+                }
+                // `classify` only returns the states above once bytes were read.
+                SkillState::Missing => None,
+            };
+            (RemoveChange::Removed, true, detail)
+        }
+    };
+
+    let remove_record = record.is_some();
+    let mut removed = Vec::new();
+    if remove_skill {
+        removed.push(path.clone());
+    }
+    if remove_record {
+        removed.push(record_path.clone());
+    }
+    let remove_dir = !removed.is_empty() && will_be_empty(&dir, &removed);
+
+    Ok(RemovePlan {
+        dir,
+        path,
+        record_path,
+        change,
+        remove_skill,
+        remove_record,
+        remove_dir,
+        detail,
+    })
+}
+
+/// Apply a planned skill removal. Missing files are tolerated so a rerun after a partial
+/// removal still finishes the job.
+pub fn apply_remove(plan: &RemovePlan) -> Result<()> {
+    for (enabled, path) in [
+        (plan.remove_skill, &plan.path),
+        (plan.remove_record, &plan.record_path),
+    ] {
+        if !enabled {
+            continue;
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(Error::corrupt(format!(
+                    "cannot remove {}: {err}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    if plan.remove_dir {
+        // If another file appeared between planning and applying, the directory is not
+        // empty; keeping it is harmless, so a failed rmdir is not an error.
+        let _ = std::fs::remove_dir(&plan.dir);
+    }
+    Ok(())
+}
+
+/// Whether `dir` would contain nothing but the paths about to be deleted.
+fn will_be_empty(dir: &Path, removed: &[PathBuf]) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .all(|entry| removed.iter().any(|path| path == &entry.path()))
+}
+
+fn guard_remove(harness: &Harness, detail: String, force: bool) -> Result<Option<String>> {
+    if !force {
+        return Err(Error::AgentConflict(format!(
+            "{} skill conflict: {detail}; rerun with `--force` to remove it",
+            harness.display
+        )));
+    }
+    Ok(Some(detail))
+}
+
 fn skill_dir(harness: &Harness, scope: Scope, home: &Path, cwd: &Path) -> Result<PathBuf> {
     harness.skill_dir(scope, home, cwd).ok_or_else(|| {
         Error::usage(format!(
@@ -433,6 +610,143 @@ mod tests {
                 .unwrap();
         assert_eq!(record.tool, "akey");
         assert_eq!(record.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    fn remove_for(harness: &Harness, home: &Path, cwd: &Path, force: bool) -> Result<RemovePlan> {
+        plan_remove(harness, Scope::User, home, cwd, force)
+    }
+
+    #[test]
+    fn uninstall_removes_a_managed_skill_and_its_empty_directory() {
+        for harness in registry::harnesses() {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path();
+            install(harness, home, temp.path());
+
+            let planned = remove_for(harness, home, temp.path(), false).unwrap();
+            assert_eq!(planned.change, RemoveChange::Removed, "{}", harness.id);
+            assert!(
+                planned.remove_skill && planned.remove_record,
+                "{}",
+                harness.id
+            );
+            assert!(planned.remove_dir, "{}", harness.id);
+            apply_remove(&planned).unwrap();
+
+            assert!(!planned.path.exists(), "{}", harness.id);
+            assert!(!planned.record_path.exists(), "{}", harness.id);
+            assert!(!planned.dir.exists(), "{}", harness.id);
+            assert_eq!(
+                inspect(harness, Scope::User, home, temp.path())
+                    .unwrap()
+                    .state,
+                SkillState::Missing,
+                "{}",
+                harness.id
+            );
+
+            let again = remove_for(harness, home, temp.path(), false).unwrap();
+            assert_eq!(again.change, RemoveChange::Missing, "{}", harness.id);
+            apply_remove(&again).unwrap();
+        }
+    }
+
+    #[test]
+    fn uninstall_requires_force_for_an_edited_skill() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let hermes = harness("hermes");
+        install(hermes, home, temp.path());
+        let path = home.join(".hermes/skills/akey/SKILL.md");
+        std::fs::write(&path, "my edits\n").unwrap();
+
+        let err = remove_for(hermes, home, temp.path(), false).unwrap_err();
+        assert!(matches!(err, Error::AgentConflict(_)), "{err:?}");
+        assert!(path.exists());
+
+        let forced = remove_for(hermes, home, temp.path(), true).unwrap();
+        assert_eq!(forced.change, RemoveChange::Removed);
+        assert!(forced.detail.is_some());
+        apply_remove(&forced).unwrap();
+        assert!(!path.exists());
+        assert!(!home.join(".hermes/skills/akey").exists());
+    }
+
+    #[test]
+    fn uninstall_requires_force_for_an_unmanaged_skill_and_keeps_foreign_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let dir = home.join(".claude/skills/akey");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "# somebody else's\n").unwrap();
+        std::fs::write(
+            dir.join(".akey-managed"),
+            r#"{"tool":"other","version":"1","sha256":"x","installed_at":"now"}"#,
+        )
+        .unwrap();
+
+        let err = remove_for(harness("claude"), home, temp.path(), false).unwrap_err();
+        assert!(matches!(err, Error::AgentConflict(_)), "{err:?}");
+
+        let forced = remove_for(harness("claude"), home, temp.path(), true).unwrap();
+        assert_eq!(forced.change, RemoveChange::Removed);
+        assert!(forced.remove_skill);
+        assert!(!forced.remove_record, "a foreign sidecar must survive");
+        assert!(
+            !forced.remove_dir,
+            "the foreign sidecar keeps the dir alive"
+        );
+        apply_remove(&forced).unwrap();
+
+        assert!(!dir.join("SKILL.md").exists());
+        assert!(dir.join(".akey-managed").exists());
+        assert!(dir.exists());
+    }
+
+    #[test]
+    fn uninstall_cleans_an_orphan_sidecar() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let dir = home.join(".agents/skills/akey");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".akey-managed"),
+            serde_json::json!({
+                "tool": "akey",
+                "version": env!("CARGO_PKG_VERSION"),
+                "sha256": hash(BODY.as_bytes()),
+                "installed_at": "2026-01-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let planned = remove_for(harness("codex"), home, temp.path(), false).unwrap();
+        assert_eq!(planned.change, RemoveChange::Cleaned);
+        assert!(!planned.remove_skill && planned.remove_record);
+        assert!(planned.remove_dir);
+        apply_remove(&planned).unwrap();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn uninstall_keeps_a_directory_with_other_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let hermes = harness("hermes");
+        install(hermes, home, temp.path());
+        let dir = home.join(".hermes/skills/akey");
+        std::fs::write(dir.join("notes.md"), "keep me\n").unwrap();
+
+        let planned = remove_for(hermes, home, temp.path(), false).unwrap();
+        assert!(!planned.remove_dir);
+        apply_remove(&planned).unwrap();
+        assert!(!dir.join("SKILL.md").exists());
+        assert!(!dir.join(".akey-managed").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("notes.md")).unwrap(),
+            "keep me\n"
+        );
     }
 
     #[test]
