@@ -114,9 +114,13 @@ pub fn merge3(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
     let purged = merge_purged(&ours.purged, &theirs.purged);
 
     let mut vault = Vault {
-        // Container metadata follows the local workspace (the vault name and format version are
-        // the same on both devices, so either side would do; pinning `ours` is what makes "same input, same output" hold).
-        version: ours.version,
+        // Container metadata follows the local workspace (the vault name is the same on both
+        // devices, so either side would do; pinning `ours` is what makes "same input, same
+        // output" hold). The format version, however, can differ across a v1↔v2 boundary —
+        // the merge must produce a vault whose version is the **highest** of the three sides,
+        // otherwise the next save would downgrade and silently lose the `Category::Password`
+        // entries that live only on the newer side.
+        version: base.version.max(ours.version).max(theirs.version),
         vault: ours.vault.clone(),
         entries: BTreeMap::new(),
         tokens: BTreeMap::new(),
@@ -948,5 +952,45 @@ mod tests {
         theirs.tokens.insert(id(7), theirs_token);
 
         (base, ours, theirs)
+    }
+
+    // ─────────────────────────── v1 ↔ v2 merge ───────────────────────────
+
+    /// `merge3` must produce the highest of the three versions so a side carrying
+    /// `Category::Password` entries does not lose them when merging with an older
+    /// `version: 1` workspace.
+    #[test]
+    fn merge3_picks_max_version_across_v1_v2_boundary() {
+        let e = entry(id(1), "shared", "v", 1_000);
+        let mut v1 = vault(vec![e.clone()]);
+        v1.version = 1;
+        let mut v2 = vault(vec![e.clone()]);
+        v2.version = 2;
+
+        // (v1 base, v1 ours, v2 theirs) — a device upgrading mid-stream.
+        let r = merge3(&v1, &v1, &v2);
+        assert_eq!(r.vault.version, 2);
+        assert_eq!(r.vault.entries.len(), 1);
+
+        // (v2 base, v1 ours, v2 theirs) — the local workspace is stale.
+        let r = merge3(&v2, &v1, &v2);
+        assert_eq!(r.vault.version, 2);
+    }
+
+    /// A `Password`-category entry that lives only on the v2 side must survive a
+    /// three-way merge against two v1 sides that never saw it.
+    #[test]
+    fn merge3_keeps_v2_only_password_entry_against_two_v1_sides() {
+        let mut only_on_v2 = entry(id(2), "wifi", "ssid-secret", 2_000);
+        only_on_v2.category = Category::Password;
+        let mut v2 = vault(vec![only_on_v2]);
+        v2.version = 2;
+        let v1 = Vault::default();
+
+        let r = merge3(&v1, &v1, &v2);
+        assert_eq!(r.vault.version, 2);
+        assert_eq!(r.vault.entries.len(), 1);
+        assert_eq!(r.vault.entries[&id(2)].category, Category::Password);
+        assert!(r.conflicts.is_empty());
     }
 }

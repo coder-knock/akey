@@ -519,4 +519,13 @@ fn a_wrong_recovery_passphrase_cannot_join() {
     );
     // No half-finished identity is left behind.
     assert!(!stranger.home_path().join("identity.key").is_file());
+    assert!(
+        !stranger.repo().exists(),
+        "failed bootstrap must not leave a cloned repository"
+    );
+
+    // The same device and path can be retried immediately with the right passphrase.
+    stranger.join(&url, "new-laptop", PASS);
+    let who = stranger.json_ok(&["whoami"]);
+    assert_eq!(who["device"], "new-laptop");
 }

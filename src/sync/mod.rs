@@ -92,14 +92,16 @@ pub fn sync(store: &Store, mode: SyncMode) -> Result<SyncOutcome> {
         return Ok(SyncOutcome::NoRemote);
     }
 
-    // Settle the working tree first, so `ours` is the content of HEAD.
-    git.add_paths(SYNCED_FILES)?;
-    git.commit(&format!("akey: local changes from {device}"))?;
-
+    // Status is observational: it may refresh remote-tracking refs, but it must never stage
+    // or commit the local vault. This is what makes it safe under a read-only capability token.
     if mode == SyncMode::Status {
         git.fetch()?;
         return status(&git);
     }
+
+    // Settle the working tree first, so `ours` is the content of HEAD.
+    git.add_paths(SYNCED_FILES)?;
+    git.commit(&format!("akey: local changes from {device}"))?;
 
     let mut last_rejection = None;
     for _ in 0..MAX_PUSH_ATTEMPTS {

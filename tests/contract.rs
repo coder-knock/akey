@@ -7,6 +7,7 @@ mod common;
 
 use common::{Device, bare_remote};
 
+use std::process::Command;
 use tempfile::TempDir;
 
 const CANARY: &str = "CANARY-3f9a7b2e";
@@ -56,6 +57,45 @@ fn human_mode_keeps_diagnostics_off_stdout() {
         !out.stderr.is_empty(),
         "human mode must explain the failure on stderr"
     );
+}
+
+#[test]
+fn json_usage_errors_are_single_error_envelopes() {
+    let device = Device::blank();
+    let out = device.run(&["--json", "not-a-command"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&out.stderr)
+        .expect("--json parse failures must be JSON, not clap prose");
+    assert_eq!(error["ok"], false);
+    assert_eq!(error["error"]["code"], "usage");
+}
+
+#[test]
+fn uninitialized_reason_is_stable_across_locales() {
+    let device = Device::blank();
+    for lang in ["en", "zh-CN"] {
+        let out = device.run(&["--lang", lang, "--json", "whoami"]);
+        assert_eq!(out.status.code(), Some(4));
+        assert!(out.stdout.is_empty());
+        let envelope: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+        assert_eq!(envelope["error"]["code"], "locked");
+        assert_eq!(envelope["error"]["reason"], "uninitialized");
+    }
+}
+
+#[test]
+fn a_partial_batch_failure_writes_nothing_to_stdout() {
+    let device = with_entry();
+    let out = device.run(&["--json", "rm", "openai", "missing-entry"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        out.stdout.is_empty(),
+        "failure must not emit a success envelope first: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let error: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(error["ok"], false);
 }
 
 // --------------------------------------------------------------- exit codes
@@ -173,6 +213,71 @@ fn a_token_cannot_write() {
 
     // The vault was not touched.
     assert_eq!(entry_names(&device), vec!["openai".to_string()]);
+}
+
+#[test]
+fn a_token_cannot_trigger_a_mutating_sync() {
+    let device = with_entry();
+    let created = device.json_ok(&["token", "create", "--name", "reader", "--allow", "openai"]);
+    let token = created["token"].as_str().unwrap();
+
+    let out = device
+        .command()
+        .env("AKEY_TOKEN", token)
+        .args(["--json", "sync"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(7));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn token_sync_status_never_commits_local_changes() {
+    let remote = TempDir::new().unwrap();
+    let url = bare_remote(&remote);
+    let device = Device::blank();
+    device.init("testbox", &["--remote", &url]);
+    let created = device.json_ok(&["token", "create", "--name", "reader"]);
+    let token = created["token"].as_str().unwrap();
+
+    let rev = || {
+        let output = Command::new("git")
+            .args(["-C", device.repo().to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        output.stdout
+    };
+    let before = rev();
+    let out = device
+        .command()
+        .env("AKEY_TOKEN", token)
+        .args(["--json", "sync", "--status"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        rev(),
+        before,
+        "sync --status created a commit under a token"
+    );
+}
+
+#[test]
+fn whoami_rejects_an_invalid_token_instead_of_claiming_local_authority() {
+    let device = with_entry();
+    let out = device
+        .command()
+        .env("AKEY_TOKEN", "akey_not-a-valid-token")
+        .args(["--json", "whoami"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
 }
 
 /// Key regression: scope must apply to injection too, otherwise `--allow` is meaningless.
@@ -716,7 +821,7 @@ fn every_category_has_a_usable_template() {
         assert_eq!(data["category"], category);
     }
     let listed = device.json_ok(&["template", "list"]);
-    assert_eq!(listed["categories"].as_array().unwrap().len(), 7);
+    assert_eq!(listed["categories"].as_array().unwrap().len(), 8);
     // Every category must report its default secret field — `set --stdin` relies on it when no field name is given.
     for entry in listed["categories"].as_array().unwrap() {
         assert!(
@@ -793,6 +898,33 @@ fn documents_round_trip_binary_payloads() {
         restored.to_str().unwrap(),
     ]);
     assert_eq!(std::fs::read(&restored).unwrap(), payload, "byte-for-byte");
+}
+
+#[test]
+fn doc_get_dry_run_never_writes_plaintext() {
+    let device = with_entry();
+    let source = device.workspace.path().join("attachment.bin");
+    std::fs::write(&source, b"attachment-secret").unwrap();
+    device.json_ok(&[
+        "doc",
+        "put",
+        "openai",
+        source.to_str().unwrap(),
+        "--field",
+        "attachment",
+    ]);
+
+    let target = device.workspace.path().join("must-not-exist.bin");
+    let data = device.json_ok(&[
+        "--dry-run",
+        "doc",
+        "get",
+        "akey://openai/attachment",
+        "-o",
+        target.to_str().unwrap(),
+    ]);
+    assert_eq!(data["dry_run"], true);
+    assert!(!target.exists(), "dry-run wrote a plaintext attachment");
 }
 
 #[test]
@@ -963,6 +1095,21 @@ fn a_weak_recovery_passphrase_is_refused_from_any_source() {
         Some(2),
         "rotate must refuse a weak replacement too"
     );
+}
+
+#[test]
+fn failed_recovery_init_is_immediately_retryable() {
+    let device = Device::blank();
+    let failed = device.run_with_env(
+        &["init", "--recovery", "--device", "testbox"],
+        &[("AKEY_RECOVERY_PASSPHRASE", "short")],
+    );
+    assert_eq!(failed.status.code(), Some(2));
+    assert!(!device.home_path().join("config.toml").exists());
+    assert!(!device.home_path().join("identity.key").exists());
+
+    device.init("testbox", &[]);
+    assert!(device.home_path().join("config.toml").is_file());
 }
 
 #[test]

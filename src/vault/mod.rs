@@ -1,6 +1,8 @@
 //! Vault: data model, recipient list, store orchestration, three-way merge.
 
+pub mod generator;
 pub mod merge;
+pub mod migrate;
 pub mod model;
 pub mod recipients;
 pub mod store;

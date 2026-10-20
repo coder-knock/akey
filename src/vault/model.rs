@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 pub const DEFAULT_VAULT: &str = "default";
 pub const MAX_NAME_LEN: usize = 64;
 
@@ -323,6 +323,10 @@ pub enum Category {
     SshKey,
     SecureNote,
     EnvBundle,
+    /// A single secret value with no surrounding skeleton: a WiFi PSK, an app-specific
+    /// key, a database root password you don't want to file under `database`. See
+    /// DESIGN.md §17.4.
+    Password,
 }
 
 impl Category {
@@ -343,6 +347,7 @@ impl Category {
             Category::SshKey => &[("private key", SshKey), ("public key", String)],
             Category::SecureNote => &[("notes", Notes)],
             Category::EnvBundle => &[],
+            Category::Password => &[("password", FieldType::Concealed)],
         }
     }
 
@@ -356,6 +361,7 @@ impl Category {
             Category::SshKey => "private key",
             Category::SecureNote => "notes",
             Category::EnvBundle => "",
+            Category::Password => "password",
         }
     }
 
@@ -368,6 +374,7 @@ impl Category {
             Category::SshKey => "ssh-key",
             Category::SecureNote => "secure-note",
             Category::EnvBundle => "env-bundle",
+            Category::Password => "password",
         }
     }
 }
@@ -537,6 +544,19 @@ mod tests {
 
         let plain = Field::new("username", FieldType::String, "me".into());
         assert_eq!(plain.display_value(false), "me");
+    }
+
+    #[test]
+    fn category_password_has_single_password_field() {
+        let c = Category::Password;
+        assert_eq!(c.builtin_fields(), &[("password", FieldType::Concealed)]);
+        assert_eq!(c.default_secret_field(), "password");
+        assert_eq!(c.as_str(), "password");
+    }
+
+    #[test]
+    fn format_version_is_2_after_password_introduction() {
+        assert_eq!(FORMAT_VERSION, 2);
     }
 
     #[test]

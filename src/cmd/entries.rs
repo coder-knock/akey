@@ -37,7 +37,7 @@ const CONFLICT_MARK: &str = ".conflict.";
 /// Conflict-entry tag, matching the tag `vault::merge` applies.
 const CONFLICT_TAG: &str = "conflict";
 
-const ALL_CATEGORIES: [Category; 7] = [
+const ALL_CATEGORIES: [Category; 8] = [
     Category::Apikey,
     Category::Login,
     Category::Token,
@@ -45,6 +45,7 @@ const ALL_CATEGORIES: [Category; 7] = [
     Category::SshKey,
     Category::SecureNote,
     Category::EnvBundle,
+    Category::Password,
 ];
 
 // ─────────────────────────────── Command entry points ───────────────────────────────
@@ -224,8 +225,10 @@ pub fn rm(ctx: &Ctx, args: &RmArgs) -> Result<()> {
     if !dry {
         record_batch(ctx, &store, Action::Delete, &report)?;
     }
-    ctx.out.emit(report.human(), &report.data(dry))?;
-    report.into_error()
+    if let Some(err) = report.error() {
+        return Err(err);
+    }
+    ctx.out.emit(report.human(), &report.data(dry))
 }
 
 /// Restore a soft-deleted entry.
@@ -251,8 +254,10 @@ pub fn restore(ctx: &Ctx, args: &RestoreArgs) -> Result<()> {
     if !dry {
         record_batch(ctx, &store, Action::Restore, &report)?;
     }
-    ctx.out.emit(report.human(), &report.data(dry))?;
-    report.into_error()
+    if let Some(err) = report.error() {
+        return Err(err);
+    }
+    ctx.out.emit(report.human(), &report.data(dry))
 }
 
 /// Copy an entry: a new ID and a new name, with the source untouched.
@@ -1673,9 +1678,9 @@ impl BatchReport {
     }
 
     /// Returns an error when any item failed (keeping the first item's kind and exit code), naming the successful items in the message.
-    fn into_error(self) -> Result<()> {
+    fn error(&self) -> Option<Error> {
         if self.failed.is_empty() {
-            return Ok(());
+            return None;
         }
         let succeeded = self.succeeded();
         let (_, first) = &self.failed[0];
@@ -1691,7 +1696,7 @@ impl BatchReport {
                 crate::msg!("succeeded: {}", "成功：{}", succeeded.join(", "))
             }
         );
-        Err(match first.code() {
+        Some(match first.code() {
             "usage" => Error::Usage(head),
             "ambiguous" => Error::Ambiguous(head),
             _ => Error::NotFound(head),
@@ -2514,7 +2519,7 @@ mod tests {
         );
         assert_eq!(third.results.len(), 1);
         assert_eq!(third.failed.len(), 1);
-        let err = third.into_error().unwrap_err();
+        let err = third.error().unwrap();
         assert!(matches!(err, Error::NotFound(_)), "{err:?}");
         assert!(err.to_string().contains("openai"), "{err}");
 
@@ -2553,7 +2558,7 @@ mod tests {
         vault.entries.insert(other_id, other);
         let report = apply_restore(&mut vault, &[other_id.to_string()], t);
         assert_eq!(report.failed.len(), 1);
-        assert!(matches!(report.into_error().unwrap_err(), Error::Usage(_)));
+        assert!(matches!(report.error().unwrap(), Error::Usage(_)));
         assert!(vault.entries[&other_id].deleted_at.is_some());
     }
 
@@ -2908,6 +2913,6 @@ mod tests {
                 assert!(!value["fields"].as_array().unwrap().is_empty());
             }
         }
-        assert_eq!(ALL_CATEGORIES.len(), 7);
+        assert_eq!(ALL_CATEGORIES.len(), 8);
     }
 }

@@ -25,6 +25,11 @@ pub enum Error {
     #[error("{0}")]
     Locked(String),
 
+    /// First-run state. Publicly this remains the frozen `locked` / exit-4 contract, while
+    /// JSON clients get a stable reason that does not depend on localized prose.
+    #[error("{0}")]
+    Uninitialized(String),
+
     /// Sync produced a conflict that needs manual resolution. Exit 5.
     #[error("{0}")]
     Conflict(String),
@@ -67,7 +72,7 @@ impl Error {
             Error::Usage(_) => "usage",
             Error::NotFound(_) => "not_found",
             Error::Ambiguous(_) => "ambiguous",
-            Error::Locked(_) => "locked",
+            Error::Locked(_) | Error::Uninitialized(_) => "locked",
             Error::Conflict(_) => "conflict",
             Error::SyncFailed(_) => "sync_failed",
             Error::Denied(_) => "denied",
@@ -84,7 +89,7 @@ impl Error {
         match self {
             Error::Usage(_) => 2,
             Error::NotFound(_) | Error::Ambiguous(_) => 3,
-            Error::Locked(_) => 4,
+            Error::Locked(_) | Error::Uninitialized(_) => 4,
             Error::Conflict(_) => 5,
             Error::SyncFailed(_) => 6,
             Error::Denied(_) => 7,
@@ -111,7 +116,7 @@ impl Error {
                 "use the entry ID instead of the name",
                 "改用条目 ID 而不是名字",
             )),
-            Error::Locked(_) => Some(crate::i18n::m(
+            Error::Locked(_) | Error::Uninitialized(_) => Some(crate::i18n::m(
                 "run `akey doctor` to diagnose the vault state",
                 "运行 `akey doctor` 诊断金库状态",
             )),
@@ -151,6 +156,17 @@ impl Error {
         Error::Locked(msg.into())
     }
 
+    pub fn uninitialized(msg: impl Into<String>) -> Self {
+        Error::Uninitialized(msg.into())
+    }
+
+    pub fn reason(&self) -> Option<&'static str> {
+        match self {
+            Error::Uninitialized(_) => Some("uninitialized"),
+            _ => None,
+        }
+    }
+
     pub fn denied(msg: impl Into<String>) -> Self {
         Error::Denied(msg.into())
     }
@@ -162,6 +178,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
     pub code: Code,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<&'static str>,
@@ -171,6 +189,7 @@ impl From<&Error> for ErrorBody {
     fn from(e: &Error) -> Self {
         ErrorBody {
             code: e.code(),
+            reason: e.reason(),
             message: e.to_string(),
             hint: e.hint(),
         }
@@ -189,6 +208,7 @@ mod tests {
             (Error::NotFound("x".into()), 3, "not_found"),
             (Error::Ambiguous("x".into()), 3, "ambiguous"),
             (Error::Locked("x".into()), 4, "locked"),
+            (Error::Uninitialized("x".into()), 4, "locked"),
             (Error::Conflict("x".into()), 5, "conflict"),
             (Error::SyncFailed("x".into()), 6, "sync_failed"),
             (Error::Denied("x".into()), 7, "denied"),
@@ -210,9 +230,18 @@ mod tests {
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["code"], "usage");
         assert!(json.get("hint").is_none(), "hint must be absent, not null");
+        assert!(
+            json.get("reason").is_none(),
+            "reason must be absent, not null"
+        );
 
         let body = ErrorBody::from(&Error::NotFound("nope".into()));
         let json = serde_json::to_value(&body).unwrap();
         assert!(json["hint"].is_string());
+
+        let body = ErrorBody::from(&Error::Uninitialized("missing config".into()));
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["code"], "locked");
+        assert_eq!(json["reason"], "uninitialized");
     }
 }

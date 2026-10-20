@@ -9,11 +9,12 @@ use crate::cli::{Cli, Command, SyncArgs};
 use crate::error::{Error, Result};
 use crate::output::{Format, Output};
 use crate::paths::Paths;
-use crate::sync::{SyncOutcome, sync};
+use crate::sync::{SyncMode, SyncOutcome, sync};
 use crate::vault::model::{Entry, Reveal, TokenMeta, Vault};
 use crate::vault::store::Store;
 
 pub mod admin;
+pub mod audit;
 pub mod deliver;
 pub mod entries;
 
@@ -303,12 +304,12 @@ pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
             raw
         ))
     })?;
-    let seconds = match unit.trim() {
-        "" | "s" | "sec" | "secs" => value,
-        "m" | "min" | "mins" => value * 60,
-        "h" | "hr" | "hrs" => value * 3600,
-        "d" | "day" | "days" => value * 86_400,
-        "w" | "wk" | "weeks" => value * 604_800,
+    let multiplier = match unit.trim() {
+        "" | "s" | "sec" | "secs" => 1,
+        "m" | "min" | "mins" => 60,
+        "h" | "hr" | "hrs" => 3600,
+        "d" | "day" | "days" => 86_400,
+        "w" | "wk" | "weeks" => 604_800,
         other => {
             return Err(Error::usage(crate::msg!(
                 "invalid duration unit '{}': use s, m, h, d or w",
@@ -317,10 +318,25 @@ pub fn parse_duration(raw: &str) -> Result<chrono::Duration> {
             )));
         }
     };
-    Ok(chrono::Duration::seconds(seconds))
+    let seconds = value.checked_mul(multiplier).ok_or_else(|| {
+        Error::usage(crate::msg!(
+            "duration '{}' is too large",
+            "时长 '{}' 过大",
+            raw
+        ))
+    })?;
+    chrono::Duration::try_seconds(seconds).ok_or_else(|| {
+        Error::usage(crate::msg!(
+            "duration '{}' is out of range",
+            "时长 '{}' 超出范围",
+            raw
+        ))
+    })
 }
 
 pub fn run() -> i32 {
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let requested_json = argv_requests_json(&argv);
     // Localize before parsing. `--help` is produced by the parse, so the language has to be
     // settled first — hence the argv pre-scan. Precedence is `--lang`, then `$AKEY_LANG`, then
     // the locale variables, then English.
@@ -333,16 +349,45 @@ pub fn run() -> i32 {
             // exist. Goes through `Output` like every other failure that happens before a
             // `Ctx` exists, rather than a bare stderr line.
             let err = Error::usage(err.to_string());
-            Output::human().error(&err);
+            Output::new(
+                if requested_json {
+                    crate::output::Format::Json
+                } else {
+                    crate::output::Format::Human
+                },
+                false,
+                false,
+            )
+            .error(&err);
             return err.exit_code();
         }
     }
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(cli) => cli,
+        Err(parse_error) => {
+            let exit = parse_error.exit_code();
+            if requested_json && exit != 0 {
+                Output::new(crate::output::Format::Json, false, false)
+                    .error(&Error::usage(parse_error.to_string()));
+            } else {
+                let _ = parse_error.print();
+            }
+            return exit;
+        }
+    };
     let ctx = match Ctx::new(&cli) {
         Ok(ctx) => ctx,
         Err(err) => {
-            let fallback = Output::human();
+            let fallback = Output::new(
+                if cli.json {
+                    crate::output::Format::Json
+                } else {
+                    cli.format
+                },
+                cli.quiet,
+                false,
+            );
             fallback.error(&err);
             return err.exit_code();
         }
@@ -357,6 +402,19 @@ pub fn run() -> i32 {
     }
 }
 
+fn argv_requests_json(argv: &[std::ffi::OsString]) -> bool {
+    let mut iter = argv.iter().skip(1).map(|arg| arg.to_string_lossy());
+    while let Some(arg) = iter.next() {
+        if arg == "--json" || arg == "--format=json" {
+            return true;
+        }
+        if arg == "--format" && iter.next().as_deref() == Some("json") {
+            return true;
+        }
+    }
+    false
+}
+
 fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
     match command {
         Command::Init(args) => admin::init(ctx, &args),
@@ -365,6 +423,8 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Token(args) => admin::token(ctx, &args),
         Command::Whoami => admin::whoami(ctx),
         Command::Doctor(args) => admin::doctor(ctx, &args),
+        Command::Generate(args) => audit::generate(ctx, &args),
+        Command::Audit(args) => audit::run_command(ctx, &args),
         Command::Schema(args) => admin::schema(ctx, &args),
         Command::Completion(args) => admin::completion(ctx, &args),
         Command::Log(args) => admin::log(ctx, &args),
@@ -394,6 +454,9 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
 }
 
 fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
+    if args.mode() != SyncMode::Status {
+        ctx.gate_write()?;
+    }
     let store = ctx.store()?;
     if ctx.dry_run {
         return ctx.out.emit(
@@ -499,4 +562,15 @@ fn sync_cmd(ctx: &Ctx, args: &SyncArgs) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::parse_duration;
+
+    #[test]
+    fn duration_overflow_is_a_usage_error_instead_of_a_panic() {
+        let error = parse_duration("9223372036854775807w").unwrap_err();
+        assert_eq!(error.code(), "usage");
+    }
 }

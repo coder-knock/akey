@@ -128,6 +128,20 @@ pub enum Command {
     Whoami,
     #[command(about = i18n::m("Self-check", "自检"))]
     Doctor(DoctorArgs),
+    #[command(
+        about = i18n::m(
+            "Generate a password or passphrase from a recipe (no vault needed)",
+            "按配方生成密码或词组（不需要金库）"
+        )
+    )]
+    Generate(GenerateArgs),
+    #[command(
+        about = i18n::m(
+            "Audit vault secrets for weak / reused / stale-rotating / expiring entries (never prints values or hashes)",
+            "审计金库：弱密码 / 重复使用 / 轮换陈旧 / 即将过期（不输出值或哈希）"
+        )
+    )]
+    Audit(AuditArgs),
     #[command(about = i18n::m("Print the machine-readable command list", "输出机器可读的命令清单"))]
     Schema(SchemaArgs),
     #[command(about = i18n::m("Generate shell completions", "生成 shell 补全"))]
@@ -166,6 +180,10 @@ pub struct InitArgs {
         help = i18n::m("Do not set a recovery passphrase", "不设恢复密码"),
         long, conflicts_with = "recovery")]
     pub no_recovery: bool,
+    #[arg(
+        help = i18n::m("Minimum length for the new recovery passphrase (default 12)", "新恢复密码的最小长度（默认 12）"),
+        long, value_name = "N")]
+    pub min_passphrase_len: Option<u16>,
 }
 
 #[derive(Debug, Args)]
@@ -442,11 +460,23 @@ pub struct RecoveryArgs {
 #[derive(Debug, Subcommand)]
 pub enum RecoveryCommand {
     #[command(about = i18n::m("Set a recovery passphrase (creates the bootstrap identity)", "设置恢复密码（生成引导身份）"))]
-    Set,
+    Set {
+        #[arg(
+            help = i18n::m("Minimum length for the new recovery passphrase (default 12)", "新恢复密码的最小长度（默认 12）"),
+            long, value_name = "N")]
+        min_passphrase_len: Option<u16>,
+    },
     #[command(about = i18n::m("Rotate the recovery passphrase", "轮换恢复密码"))]
-    Rotate,
+    Rotate {
+        #[arg(
+            help = i18n::m("Minimum length for the new recovery passphrase (default 12)", "新恢复密码的最小长度（默认 12）"),
+            long, value_name = "N")]
+        min_passphrase_len: Option<u16>,
+    },
     #[command(about = i18n::m("Verify that the recovery passphrase works", "验证恢复密码可用"))]
     Unlock,
+    #[command(about = i18n::m("Report whether a recovery passphrase is configured and how strong it is (never the passphrase itself)", "报告恢复密码是否已设置以及强度等级（绝不输出密码本身）"))]
+    Status,
 }
 
 #[derive(Debug, Args)]
@@ -501,6 +531,22 @@ pub struct LogArgs {
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {}
+
+#[derive(Debug, Args)]
+pub struct GenerateArgs {
+    /// Recipe: comma-separated tokens. Empty = `letters,digits,symbols,32`.
+    #[arg(
+        help = i18n::m(
+            "Recipe (e.g. `letters,digits,symbols,32`, `no-ambiguous,24`, `hex,40`, `passphrase,5`)",
+            "配方（如 `letters,digits,symbols,32`、`no-ambiguous,24`、`hex,40`、`passphrase,5`）"
+        ),
+        value_name = "RECIPE",
+        default_value = "")]
+    pub recipe: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AuditArgs {}
 
 #[derive(Debug, Args)]
 pub struct SchemaArgs {}

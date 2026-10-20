@@ -160,16 +160,28 @@ impl Store {
     }
 
     /// Decrypt the vault. This is the entry point for every read command.
+    ///
+    /// If the on-disk vault is older than the current `FORMAT_VERSION`, `load` migrates
+    /// it forward and writes the result back atomically. `sync` is what eventually pushes
+    /// the new revision to the remote; this method only ensures the local workspace is
+    /// never stale across `load` invocations.
     pub fn load(&self) -> Result<Vault> {
         let ciphertext = paths::read_file(&self.vault_path()).map_err(|e| match e {
-            Error::Locked(_) => Error::Locked(crate::msg!(
+            Error::Locked(_) | Error::Uninitialized(_) => Error::Uninitialized(crate::msg!(
                 "no vault at {}; run `akey init` or `akey init --from <url>`",
                 "{} 处没有金库；请运行 `akey init` 或 `akey init --from <url>`",
                 self.vault_path().display()
             )),
             other => other,
         })?;
-        self.open_ciphertext(&ciphertext)
+        let vault = self.open_ciphertext(&ciphertext)?;
+        if vault.version < FORMAT_VERSION {
+            let migrated = crate::vault::migrate::v1_to_v2(vault);
+            self.save(&migrated)?;
+            Ok(migrated)
+        } else {
+            Ok(vault)
+        }
     }
 
     /// Decrypt from in-memory ciphertext (sync decrypts historical versions this way).
@@ -461,5 +473,51 @@ mod tests {
             worst < std::time::Duration::from_millis(100),
             "cold read took {worst:?}, over the 100ms budget"
         );
+    }
+
+    /// Loading a vault that was written by v0.1 (FORMAT_VERSION=1) must migrate it
+    /// forward in place: the loaded `Vault` carries `version: 2`, the on-disk
+    /// `vault.age` is re-written at v2, and entries are preserved unchanged.
+    #[test]
+    fn load_migrates_v1_in_place_and_preserves_entries() {
+        let (_guard, store) = temp_store();
+
+        // Build a v1-shaped vault with two entries, encrypt + write it directly.
+        let mut v1 = Vault {
+            version: 1,
+            ..Vault::default()
+        };
+        let e1 = entry("alpha", "alpha-secret");
+        let e2 = entry("bravo", "bravo-secret");
+        let id1 = e1.id;
+        let id2 = e2.id;
+        v1.entries.insert(id1, e1);
+        v1.entries.insert(id2, e2);
+
+        // Encrypt + write bypassing Store (which always uses the current FORMAT_VERSION).
+        let plaintext = serde_json::to_vec(&v1).unwrap();
+        let recipients = store.load_recipients().unwrap();
+        let recipients_vec = recipients.to_recipients().unwrap();
+        let ciphertext = crate::crypto::encrypt_to(&recipients_vec, &plaintext).unwrap();
+        std::fs::write(store.vault_path(), &ciphertext).unwrap();
+
+        // Load: this should detect v1 and migrate.
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.version, 2);
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(loaded.entries[&id1].name, "alpha");
+        assert_eq!(
+            loaded.entries[&id1].field("credential").unwrap().value(),
+            "alpha-secret"
+        );
+        assert_eq!(
+            loaded.entries[&id2].field("credential").unwrap().value(),
+            "bravo-secret"
+        );
+
+        // Subsequent loads must NOT re-migrate (idempotency).
+        let loaded_again = store.load().unwrap();
+        assert_eq!(loaded_again.version, 2);
+        assert_eq!(loaded_again.entries.len(), 2);
     }
 }

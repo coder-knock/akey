@@ -961,19 +961,31 @@ fn doc_get(ctx: &Ctx, raw: &str, out_file: Option<&Path>) -> Result<()> {
 
     match out_file {
         Some(path) => {
-            paths::atomic_write(path, &bytes, FILE_MODE)?;
+            if !ctx.dry_run {
+                paths::atomic_write(path, &bytes, FILE_MODE)?;
+            }
             ctx.out.emit(
-                crate::msg!(
-                    "wrote {} byte(s) to {}",
-                    "已写入 {} 字节到 {}",
-                    bytes.len(),
-                    path.display()
-                ),
+                if ctx.dry_run {
+                    crate::msg!(
+                        "dry run: would write {} byte(s) to {}",
+                        "试运行：将写入 {} 字节到 {}",
+                        bytes.len(),
+                        path.display()
+                    )
+                } else {
+                    crate::msg!(
+                        "wrote {} byte(s) to {}",
+                        "已写入 {} 字节到 {}",
+                        bytes.len(),
+                        path.display()
+                    )
+                },
                 &json!({
                     "item": entry.name,
                     "field": reference.field,
                     "out_file": path.display().to_string(),
                     "bytes": bytes.len(),
+                    "dry_run": ctx.dry_run,
                 }),
             )?;
         }
