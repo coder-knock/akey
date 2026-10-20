@@ -75,6 +75,32 @@
 | NFR-5 | `paths::write_lock_times_out_with_locked_while_another_holder_is_active` | U | 另一持有者未释放时，写者在超时后返回 `locked`（退出 4）；释放后可再次取得 |
 | NFR-2 性能 | `store::hot_path_stays_under_100ms_with_a_thousand_entries`（`--ignored`） | U | `get` 单次 < 100ms（10³ 条目 vault） |
 | NFR-9 日志 | `contract::list_never_carries_field_values` | C | 见 §3 的全局断言（无单条聚合用例，由各契约用例与 `audit::log_never_contains_secret_material` 内联断言） |
+| FR-22 生成器 | `generator::recipe_tokens_combine_with_OR` | U | 每个 token 接受并并集；非法 token 拒（exit 2） |
+| FR-22 | `generator::no_ambiguous_excludes_lookalike_characters` | U | 抽样 10k 不出现 `0 O 1 l I |` |
+| FR-22 | `generator::hex_base32_base64_each_use_their_own_pool` | U | 字符集一一对应；长度恒等于 recipe length |
+| FR-22 | `generator::passphrase_draws_from_eff_wordlist` | U | 词数 = N；只含 `[a-z-]`；词表 ≥ 1024 |
+| FR-22 | `contract::generate_standalone_command_does_not_touch_vault` | C | 无 vault 也能跑；退出 0；stdout 是密码单行 |
+| FR-22 | `contract::generate_value_never_lands_in_stderr_or_audit` | C | 全部 stdout、零 stderr；audit 文件未创建 |
+| FR-22 | `contract::generate_json_envelope_is_ok_data_password` | C | `--json` 输出 `{"ok":true,"data":{"password":"…"}}` 单信封 |
+| FR-22 | `set::set_generate_password_keeps_backward_compat` | U | `akey set x --generate-password`（空 recipe）= `letters,digits,symbols,32` |
+| FR-23 恢复 UX | `admin::recovery_set_respects_min_passphrase_len_flag` | U | `--min-passphrase-len 16` 时 12 字符被拒（exit 2） |
+| FR-23 | `admin::recovery_status_emits_envelope_without_passphrase` | C | `--json` 形状固定；子串检索：不含任何输入的密码 |
+| FR-23 | `admin::recovery_unlock_still_fails_with_exit_4_on_wrong_passphrase` | U | 错误密码 → exit 4（与 `--min-passphrase-len` 错误区分） |
+| FR-24 审计 | `audit::weak_detects_short_or_single_charset_secrets` | U | 三条规则各自命中至少一个 fixture；fixture 集无 false positive |
+| FR-24 | `audit::reused_groups_two_entries_sharing_value_hash` | U | 同值不同条目成对；同值同条目不重复 |
+| FR-24 | `audit::stale_flags_rotations_older_than_365d` | U | 366 d 报 stale；180 d 不报；非 apikey/token 不报 |
+| FR-24 | `audit::doctor_includes_new_probes_with_stable_names` | C | `checks` 数组含 `weak_secrets`/`reused_secrets`/`stale_rotations`/`expiring` |
+| FR-24 | `contract::audit_envelope_carries_no_value_or_hash` | C | `audit --json` 输出全文 substring 检索：任何 fixture 中的值与哈希都不出现 |
+| FR-24 | `contract::audit_check_never_includes_value_or_hash` | C | `doctor --json` 的 `checks[].detail` 同样不含值/哈希 |
+| FR-25 `Password` 分类 | `model::category_password_has_default_secret_field_password` | U | `builtin_fields == [("password", Concealed)]`；`default_secret_field == "password"` |
+| FR-25 | `model::all_categories_length_is_8` | U | `ALL_CATEGORIES.len() == 8`；包含 `Password` |
+| FR-25 | `contract::template_list_includes_password` | C | `akey template list --json` 含 `password` 一行 |
+| FR-25 | `entries::set_password_creates_with_single_concealed_field` | U | `akey set demo --category password --generate-password=letters,16` → 单字段 `password` (Concealed) |
+| FR-25 v1→v2 | `migrate::v1_to_v2_is_identity_on_entries_tokens` | U | 迁移后 entries/tokens/purged 与原 v1 集合一致（按 ID） |
+| FR-25 v1→v2 | `migrate::v1_to_v2_bumps_version` | U | 迁移后 `version == 2` |
+| FR-25 v1↔v2 合并 | `merge::v1_v2_merge_picks_max_version_and_unions_entries` | U | `(v1 empty, v2 with one entry)` → 输出 `version == 2`，含那条 |
+| FR-25 store | `store::load_migrates_v1_in_place` | U | 写入 `version: 1` 的 vault.age → `load` → 写出 `version: 2`；条目不变 |
+| FR-25 | `contract::old_vault_loads_without_data_loss` | C | 旧的 fixture v1 vault 经 `load` 后条目数 / 字段数 / 默认秘密字段全部不变 |
 
 ## 2. 端到端夹具
 
@@ -121,4 +147,33 @@ struct Device { home: TempDir, repo: TempDir, bin: assert_cmd::Command }
 |---|---|---|
 | FR-3 幂等 set | `contract::set_repeated_with_the_same_value_is_a_no_op` | **发现缺陷**：内容未变的重复写入也会推进 `updated_at`。该字段是 `sync` 裁决合并胜负、以及派生冲突副本 ID 的输入，所以一次重试会让本机陈旧内容赢过对端的真实修改，并让两台设备对同一分歧推导出不同 ID。已改为仅在内容真正变化时推进（`apply_set` / `apply_edit`）。 |
 | FR-13 医生 | `contract::doctor_json_reports_every_probe_with_a_known_status` | 计划写的"五个段"实际实现为命名探针清单（`checks[].name`），文档随之更正。 |
-| NFR-5 锁超时 | `paths::write_lock_times_out_with_locked_while_another_holder_is_active` | `with_write_lock` 的超时此前不可测（`LOCK_TIMEOUT` 是常量）。抽出 `timeout` 参数后，竞争路径可在毫秒级断言。 |
+| NFR-5 锁超时 | `paths::write_lock_times_out_with_locked_while_another_holder_is_active` | U | `with_write_lock` 的超时此前不可测（`LOCK_TIMEOUT` 是常量）。抽出 `timeout` 参数后，竞争路径可在毫秒级断言。 |
+| FR-22 生成器 | `generator::*`（上 7 行） | 一开始就没有测试；本轮次次补齐。 |
+| FR-23 恢复 UX | `recovery::*`（上 3 行） | 旧 `recovery_unlock_verifies_the_bootstrap_can_open_the_vault` 只测「对密码解得开」，没测「短密码被拒」。补齐。 |
+| FR-24 审计 | `audit::*`（上 6 行） | 旧的 `doctor_json_reports_every_probe_with_a_known_status` 只钉状态集合，没钉新四探针的命名 / 输出是否含敏感字段。补齐。 |
+| FR-25 Password + v2 | `migrate::*`/`merge::v1_v2_*`/`store::load_migrates_v1_in_place` | 旧的迁移测试集为空——从来没有迁移发生过。引入 v2 后**必须**有这些测试，否则未来再做 v3 时无法回归。 |
+
+### 6.1 v0.4 GUI（`akey-gui`）
+
+GUI 的渲染层（GPUI）与逻辑层分开编译：`backend` / `model` 不依赖 `gpui`，因此下列测试在**没有 Metal 工具链**的机器上也能跑（`cargo test -p akey-gui`，默认 features）。GPUI 视图只做布局，不含可断言逻辑。
+
+| 需求 | 测试 | 层 | 断言什么 |
+|---|---|---|---|
+| FR-27 定位 | `backend::locate_prefers_env_override` | U | `AKEY_GUI_BIN` 存在时优先；否则找 `PATH`；都没有 → 明确错误 |
+| FR-27 定位 | `backend::locate_reports_missing_binary_with_a_hint` | U | 错误文本含 `AKEY_GUI_BIN`，不含 panic |
+| FR-27 信封 | `backend::parses_ok_envelope_into_data` | U | `{"ok":true,"data":{…}}` → `Outcome::Ok(Value)` |
+| FR-27 信封 | `backend::parses_err_envelope_with_code_and_hint` | U | `{"ok":false,"error":{code,message,hint}}` + 退出码 → `Outcome::Failure` |
+| FR-27 信封 | `backend::failure_keeps_stdout_empty_contract` | U | 非 0 退出 + 空 stdout → Failure 而非解析错误 |
+| FR-27 stdin | `backend::passes_secret_on_stdin_never_argv` | U | stub 断言参数里**不含**秘密；秘密只能从 stdin 读到 |
+| FR-27 边界 | `backend::nonzero_exit_with_unparseable_stderr_does_not_panic` | U | 垃圾 stderr → 结构化错误，不 panic |
+| FR-28 启动 | `app::startup_decision_maps_exit_4_to_the_init_prompt` | U | 退出 4 → `Startup::Uninitialized`；0 → `Startup::Ready` |
+| FR-29 列表 | `model::list_payload_maps_to_rows` | U | `data.entries[]` → `Vec<Row>`；字段名与 CLI 契约一致 |
+| FR-29 详情 | `model::detail_payload_maps_concealed_and_reference` | U | `concealed: true` + `reference` 保留；值不进 `Row` |
+| FR-30 揭示 | `model::reveal_is_not_reachable_without_an_explicit_call` | U | 从 `get --json`（无 `--reveal`）解析出的结构**不含**明文 |
+| FR-30 揭示 | `backend::reveal_denied_surfaces_as_a_policy_result` | U | stub 退出 7 → `Outcome::Failure { code: 7 }`，界面可显示「被策略拒绝」 |
+| FR-31 明文 | `revealed::value_is_dropped_on_hide_and_never_debug_printed` | U | `Revealed` 无 `Debug` 泄漏；`hide()` 后取值不可达 |
+| FR-31 明文 | `revealed::value_is_dropped_on_entry_switch` | U | 切到另一条目 → 前一个 `Revealed` 被清 |
+| FR-31 字段隔离 | `revealed::a_reveal_is_bound_to_one_field` | U | 同条目的另一字段不能读到已揭示值 |
+| FR-31 argv | `backend::write_path_never_places_a_value_in_argv` | U | `set` 的调用参数列表里不含用户输入的值 |
+| FR-27 写失败 | `verbs::mutation_failures_are_not_reported_as_rust_success` | U | CLI 非零退出不会被 GUI 当成成功状态 |
+| FR-26 依赖图 | `contract::cli_dependency_graph_is_unaffected_by_the_gui` | C | 根 crate 的 `Cargo.toml` 不含 `gpui`；`[workspace] members = ["gui"]` 存在 |

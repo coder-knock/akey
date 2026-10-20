@@ -47,6 +47,30 @@ Add `--lang en` if you parse any human-readable text; `--json` output is identic
 language, so prefer that. Supported: `en`, `zh-CN`. Exception: `schema --json` carries the
 `--help` strings and does follow `--lang`.
 
+## Generate without storing
+
+```bash
+akey generate                  # letters,digits,symbols,32 by default
+akey generate no-ambiguous,24  # drop 0/O/1/l/I/| — easier to read aloud
+akey generate passphrase,5     # EFF short wordlist, joined with `-`
+akey generate hex,40           # hex alphabet only
+akey generate --json letters,16
+```
+
+Output is a single line on stdout — no audit, no scratch file. **Never** call this in a loop
+just to write a value back: pipe it into `akey set <name> --stdin` instead, which uses the
+recipe via `--generate-password=…`.
+
+## Audit
+
+```bash
+akey audit            # weak / reused / stale-rotating / expiring
+akey doctor --json    # same probes, machine-readable severity
+```
+
+Output **never** carries a value or any hash of a value — only entry name, field id, and a
+reason. The bundled top-password list is 326 entries (~3 KB).
+
 ## Finding the reference string
 
 ```bash

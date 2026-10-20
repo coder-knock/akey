@@ -171,6 +171,31 @@
 批准并立刻重新加密，`devices untrust` 撤回。`init --from` 信任引导那一刻已在库里的收件人
 （交出恢复密码即信任锚），此后出现的公钥永不自动信任。
 
+**FR-22 密码生成器（MUST）** — 见 DESIGN §17.1/§17.2。
+- `set --generate-password[=recipe]` 保留（向后兼容）。
+- 新增独立命令 `akey generate <recipe>`（无需 vault，无需 repo；同 `template list` 的可调用性）。
+- recipe token：`letters` / `digits` / `symbols` / `no-ambiguous` / `hex` / `base32` / `base64` / `passphrase` / `<length>`。详细见 DESIGN §17.1。
+- 词组配方使用内置 EFF 短词表（CC-BY-SA 3.0），二进制 +10 KB，无网络。
+- 输出始终**只走 stdout**，密码值绝不进 stderr、不进 audit、不进 Debug。
+
+**FR-23 恢复密码 UX（MUST）** — 见 DESIGN §17.6。
+- `init --recovery` 与 `recovery set|rotate` 接受 `--min-passphrase-len <n>`（默认 12，env `AKEY_RECOVERY_MIN_LEN` 覆盖）。
+- 低于阈值 → exit 2（**用法错误**，区别于「错误密码」的 exit 4）。
+- `recovery status`（新）输出 `{configured, min_length, current_length | null, strength}`，不含密码本身。
+
+**FR-24 审计（MUST）** — 见 DESIGN §17.5。
+- `doctor` 增加四个探针：`weak_secrets` / `reused_secrets` / `stale_rotations` / `expiring`（保留）。
+- `weak` 触发：长度 < 8；仅一种字符集；命中内置 ~1000 词常见清单（双访 0）。
+- `reused`：跨条目同 `field_value_hash`，列出成对条目名。
+- `stale`：`apikey` / `token` 类条目 `rotated_at` 距今 > 365 d。
+- 探针默认 `warning`；只有现存 `error` 才让 `doctor` 退出码非 0。
+- 新增 `akey audit --json`：分组列出每条命中，`{weak, reused, stale, expiring}` 四个键，**不含值、不含哈希**。
+
+**FR-25 Password 一等分类（MUST）** — 见 DESIGN §17.4。
+- 新增 `Category::Password`，内置字段 `password` (Concealed)，默认秘密字段 `password`。
+- `ALL_CATEGORIES` 升 7 → 8；`template list` 自动多一行。
+- `vault.age` 由 `version: 1` 升 `version: 2`；迁移 `vault::migrate::v1_to_v2` 是 entry/token/tombstone 的恒等映射（DESIGN §17.7）。
+
 ---
 
 ## 7. 非功能需求
@@ -369,3 +394,38 @@ cargo 1.97.1 · rustc 1.97.1 · git 2.54.0 (Apple Git) · gh 2.101.0
 node v26.5.1 · bun 未安装（下一轮 GUI 需要）
 macOS darwin 27.2.0 · Apple M2 Max · crates.io 与 npmjs 可达 · gpg(brew) 已装
 ```
+
+---
+
+## 17. 本地密码管理扩展（v0.3）
+
+围绕「密码」这一最常见秘密类型的工作面做厚。设计依据见 DESIGN §17。
+
+| 需求 | 设计点 | 风险 |
+|---|---|---|
+| FR-22 密码生成器 | DESIGN §17.1 / §17.2 | 词表嵌入占 +10 KB；二进制仍 < 4.5 MB；网络零依赖 |
+| FR-23 恢复密码 UX | DESIGN §17.6 | `--min-passphrase-len` 与既有 `MIN_PASSPHRASE_LEN=12` 同步，默认不动 |
+| FR-24 审计 | DESIGN §17.5 | 1000 词常见清单 +5 KB；`audit --json` 不含值/哈希 |
+| FR-25 `Password` 分类 | DESIGN §17.4 / §17.7 | `vault.age` v1 → v2；迁移是恒等映射，旧库零信息损失 |
+
+**与既有约束的兼容性**：所有新载荷遵循 FR-3 的 `--json` 信封；新增命令的退出码仍取自
+{0, 2, 3, 4, 5, 6, 7, 8, 1}。`recipients.json ∩ trusted` 的加密门不动。
+
+**不在 v0.3 做**：浏览器插件 / 自动轮换 / KDF 化的 token 哈希 / 团队权限。
+
+---
+
+## 18. 桌面 GUI（`akey-gui`，v0.4）
+
+设计依据见 DESIGN §18。技术栈：GPUI（crate `gpui`）。
+
+| 需求 | 内容 |
+|---|---|
+| **FR-26 独立 workspace member（MUST）** | GUI 是根 workspace 的一个 member，**不是** CLI crate 的可选 feature。`cargo build`（根）构建出的 CLI 依赖图与 v0.1 完全一致；`gpui` 及其 `wgpu`/Metal 依赖不得进入 CLI 的 manifest 或 `cargo audit` 输出。 |
+| **FR-27 以 `--json` 为唯一接口（MUST）** | GUI 通过子进程调用 `akey --json <verb>`，不链接 `akey` 库。理由：`Output` 直写 stdout 无 sink；在进程内复用 `cmd::*` 要么改 CLI 的输出纪律（破坏 FR-3 的测试），要么在 GUI 里重写闸门（破坏 FR-4）。二进制定位顺序：`$AKEY_GUI_BIN` → `PATH` 上的 `akey` → 明确报错。**不得**静默退回内置实现。 |
+| **FR-28 启动闸门（MUST）** | 开窗前执行 `akey whoami --json`。退出 4 → 显示「请运行 `akey init`」，**不**提供替代初始化流程。二进制缺失 → 显示定位提示后退出 2。`doctor` 的 `status: "error"` 在标题栏挂告警，不阻断只读界面。 |
+| **FR-29 六块界面（MUST）** | 列表 / 详情+揭示 / 新增编辑 / 同步（含冲突）/ 设备与令牌 / 恢复密码。底层调用见 DESIGN §18.5。 |
+| **FR-30 揭示沿用现有三重门（MUST）** | GUI 不自行判断能否揭示；一律调用 `akey get <item> --reveal --json` 并由 CLI 裁决。退出 7 → 界面显示「被策略拒绝」，**不**尝试任何旁路。 |
+| **FR-31 明文生命周期（MUST）** | 揭示值只存内存，并绑定到稳定的「条目 ID + 字段 ID」；任一时刻最多揭示一个字段。切换条目 / 窗口失焦 / 30 秒定时器 / 显式隐藏 → 丢弃。不写 config、不写日志、不进 panic message、`Debug` 不实现。写剪贴板是显式动作并提示风险。秘密写入走子进程 stdin，**永不** argv。 |
+
+**不在 v0.4 做**：浏览器插件 / 移动端 / 系统托盘常驻 / 生物识别解锁。

@@ -23,6 +23,10 @@
 
 ---
 
+> New here? The end-to-end walk-through is in **[docs/TUTORIAL.md](TUTORIAL.md)** —
+> one scenario, every command, verified on a fresh machine. This document is the
+> reference; the tutorial is the entry point.
+
 ## 1. Thirty-second self-check: can I use this?
 
 ```bash
@@ -292,6 +296,20 @@ akey run --with OTP=akey://github/one-time-password?attribute=otp -- ./totp-logi
 
 # Reading non-secret metadata (safe to put in context)
 akey get openai --json | jq -r '.data.fields[] | .reference'   # the reference string, not the value
+
+# Generate a strong value without ever touching a vault (output goes to stdout only)
+akey generate                                   # letters,digits,symbols,32
+akey generate no-ambiguous,24                   # no 0/O/1/l/I/|
+akey generate passphrase,5                      # five EFF diceware words
+akey generate --json letters,16                 # {"ok":true,"data":{"password":"…"}}
+```
+
+**Audit a vault** (read-only — safe under any token whose `--allow` covers the entries; `akey
+audit --json` never carries values or hashes):
+
+```bash
+akey audit                                      # grouped by weak / reused / stale / expiring
+akey doctor --json                              # same probes, machine-readable severity
 ```
 
 **Rotating a key** (needs the local device identity, not a token):

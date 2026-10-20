@@ -56,6 +56,13 @@ irm https://raw.githubusercontent.com/coder-knock/akey/main/install.ps1 | iex
 cargo install --git https://github.com/coder-knock/akey --locked
 ```
 
+**Desktop GUI (experimental)** — macOS is the currently exercised GPUI target. The GUI keeps the
+CLI as its security boundary and locates it through `$AKEY_GUI_BIN` or `PATH`:
+
+```bash
+cargo run -p akey-gui --features gpui
+```
+
 | Platform | Prebuilt | Notes |
 |---|---|---|
 | macOS arm64 / x86_64 | yes | |
@@ -96,7 +103,7 @@ akey devices trust laptop
 | Lifecycle | `init` · `devices` · `recovery` · `token` · `sync` · `conflicts` · `resolve` |
 | Entries | `get` · `set` · `edit` · `rm` · `restore` · `cp` · `mv` · `list` · `template` · `doc` |
 | Delivery (for agents) | `run` · `inject` · `read` · `mcp` |
-| Operations | `whoami` · `doctor` · `log` · `schema` · `completion` |
+| Operations | `whoami` · `doctor` · `log` · `generate` · `audit` · `schema` · `completion` |
 | Migration | `export` · `import` |
 
 For flags and arguments, ask the tool: **`akey schema --json` is the authority**, and agents should
@@ -141,6 +148,7 @@ new revision again.
 
 | | Reader | Contents |
 |---|---|---|
+| [docs/TUTORIAL.md](docs/TUTORIAL.md) | humans | One scenario walked step by step — init, set, run, sync, second machine, rotate, CI token |
 | **[docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)** | **AI agents** | How to integrate, how to recover from each exit code, what never to do |
 | **[SKILL.md](SKILL.md)** | **agent harnesses** | The same material as a loadable skill definition |
 | **[docs/SECURITY.md](docs/SECURITY.md)** | **security reviewers** | Threat model, nine attack simulations, findings and their status |
@@ -190,9 +198,9 @@ PNG or SVG export. Regeneration commands: [docs/diagrams/README.md](docs/diagram
 
 ## Status
 
-**Available now.** The CLI is complete: **195 unit + 45 contract + 11 end-to-end tests**,
-`cargo clippy` clean, a ~4 MB static release binary, and a worst-case vault read of 54 ms on a
-1000-entry vault against a 100 ms budget.
+**Available now.** The CLI is complete: **239 unit + 53 contract + 11 end-to-end tests**, and the
+GUI carries another **118 logic tests**; `cargo clippy` clean, a ~4 MB static release binary, and a
+worst-case vault read of 54 ms on a 1000-entry vault against a 100 ms budget.
 
 **Platform support.** macOS and Linux are exercised end to end. Windows builds, its unit tests
 pass, and the release workflow ships binaries for it — but the end-to-end suite drives a POSIX shell
@@ -200,7 +208,7 @@ pass, and the release workflow ships binaries for it — but the end-to-end suit
 coverage rather than a proven end-to-end path. Per-file ACLs are likewise not set; the code instead
 requires the vault home to live inside the user profile.
 
-**Roadmap.** Porting that Windows harness is next. A desktop GUI (gpuix) follows; in the meantime
+**Roadmap.** Porting the Windows harness and hardening the experimental desktop GUI are next.
 `akey mcp` already lets an agent mount the vault directly — metadata only, never values.
 
 ## License

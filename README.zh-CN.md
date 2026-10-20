@@ -54,6 +54,13 @@ irm https://raw.githubusercontent.com/coder-knock/akey/main/install.ps1 | iex
 cargo install --git https://github.com/coder-knock/akey --locked
 ```
 
+**桌面 GUI（实验性）** —— macOS 是目前实际验证的 GPUI 目标。GUI 仍以 CLI 作为安全边界，
+通过 `$AKEY_GUI_BIN` 或 `PATH` 定位 `akey`：
+
+```bash
+cargo run -p akey-gui --features gpui
+```
+
 | 平台 | 预编译 | 说明 |
 |---|---|---|
 | macOS arm64 / x86_64 | 有 | |
@@ -93,7 +100,7 @@ akey devices trust laptop
 | 生命周期 | `init` · `devices` · `recovery` · `token` · `sync` · `conflicts` · `resolve` |
 | 条目 | `get` · `set` · `edit` · `rm` · `restore` · `cp` · `mv` · `list` · `template` · `doc` |
 | 交付（给 agent） | `run` · `inject` · `read` · `mcp` |
-| 运维 | `whoami` · `doctor` · `log` · `schema` · `completion` |
+| 运维 | `whoami` · `doctor` · `log` · `generate` · `audit` · `schema` · `completion` |
 | 迁移 | `export` · `import` |
 
 参数细节问工具本身：**`akey schema --json` 是权威**，agent 应当以它为准。这张表是给「判断这东西
@@ -134,6 +141,7 @@ akey --lang zh-CN list     # 显式指定；也可用 AKEY_LANG=zh-CN，或 $LC_
 
 | | 读者 | 内容 |
 |---|---|---|
+| [docs/TUTORIAL.zh-CN.md](docs/TUTORIAL.zh-CN.md) | 人 | 一个场景一步步走 —— 初始化、存、用、同步、上第二台、轮换、CI 令牌 |
 | **[docs/AGENT-INTEGRATION.zh-CN.md](docs/AGENT-INTEGRATION.zh-CN.md)** | **AI agent** | 怎么接、出错怎么自愈、什么绝对不能做 |
 | **[SKILL.md](SKILL.md)** | **agent harness** | 同上的可加载 skill 定义 |
 | **[docs/SECURITY.zh-CN.md](docs/SECURITY.zh-CN.md)** | **安全评估者** | 威胁模型、九组攻防模拟、发现清单与状态 |
@@ -178,15 +186,15 @@ akey --lang zh-CN list     # 显式指定；也可用 AKEY_LANG=zh-CN，或 $LC_
 
 ## 状态
 
-**当前可用。** CLI 完整：**195 单元 + 45 契约 + 11 端到端测试**，`cargo clippy` 零警告，release
-静态二进制约 4 MB，1000 条目金库的最差读取 54 ms（预算 100 ms）。
+**当前可用。** CLI 完整：**239 单元 + 53 契约 + 11 端到端测试**，GUI 另有 **118 个逻辑测试**；
+`cargo clippy` 零警告，release 静态二进制约 4 MB，1000 条目金库的最差读取 54 ms（预算 100 ms）。
 
 **平台支持。** macOS 与 Linux 有端到端覆盖。Windows 能编译、单元测试通过，发布流程也为它产出
 二进制——但端到端测试套件驱动的是 POSIX shell（`sh -c`、`chmod`、`/dev/null`），目前限定在 Unix，
 所以 Windows 手上是「编译级 + 单元级」的覆盖，而不是一条被验证过的端到端路径。同样地，Windows 上
 没有设置逐文件 ACL，代码改为要求金库目录必须位于用户 profile 之内。
 
-**路线图。** 下一步是把那套 Windows 测试夹具移植过去。再往后是桌面 GUI（gpuix）；在此之前
+**路线图。** 下一步是移植 Windows 测试夹具，并继续完善实验性桌面 GUI。
 `akey mcp` 已经可以让 agent 直接挂载金库——只暴露元数据，永不返回值。
 
 ## 许可

@@ -396,3 +396,232 @@ pub struct Msg { en: &'static str, zh_cn: &'static str }
 | clap 内建的 `Usage:` / `Options:` 等标签 | clap 自绘，两语言下都是英文（上游无本地化） |
 
 **`--json` 不变式的唯一例外**：`akey schema` 的 `summary` 与 `args[].help` 就是 `--help` 的字符串，因此随 `--lang` 变化。其余所有载荷（`list`／`get`／`doctor`／`whoami`／`devices list`／各 dry-run）逐字节稳定，由 `contract::language_changes_human_text_and_leaves_the_json_contract_untouched` 钉住。
+
+---
+
+## 17. 本地密码管理：生成器、审计、`Password` 一等分类
+
+这一节把 `akey` 围绕「密码」这一最常见秘密类型的工作面做厚。不引入新的 daemon、新的服务端、不改变 `recipients.json ∩ trusted` 的加密门。改动只发生在：生成器 / 恢复密码 UX / `doctor` 的若干检查项 / 一个新的 `Category::Password`。
+
+### 17.1 生成器配方语法
+
+```
+recipe   ::= token *( "," token )      # 顺序无关
+token    ::= "letters" | "digits" | "symbols"
+          | "no-ambiguous"             # 0/O/1/l/I/| 不参与
+          | "hex" | "base32" | "base64"
+          | "passphrase"               # 见 17.2
+          | <length: 1..=4096>
+```
+
+空字符串 = `letters,digits,symbols,32`（向后兼容现有 `--generate-password`）。
+
+字符集 `pool`：
+
+| Token        | 字符集 |
+|---|---|
+| `letters`    | `a-z` ∪ `A-Z` (52) |
+| `digits`     | `0-9` (10) |
+| `symbols`    | `!@#$%^&*()-_=+[]{};:,.<>/?~` (28) |
+| `no-ambiguous` | 从当前池中剔除 `0 O o O 1 l I |` 后剩下的字符 |
+| `hex`        | `0-9a-f` (16) |
+| `base32`     | Crockford base32 字母表 (32) |
+| `base64`     | `A-Za-z0-9+/` (64) |
+
+`token` 之间以 OR 语义合并池；多 token = 多个池取并集。`passphrase` 与其它 token 互斥，**不能** 同时出现——给出 `passphrase,<n>` 时 `<n>` 是词数（默认 5），其余 token 一律拒（exit 2）。
+
+**采样**：从 CSPRNG 一次性取够字节，按 256 → pool_size 的模映射回池；模偏置通过 `limit = 256 - (256 % size)` 拒绝均匀化（已是 `entries.rs::password_from_bytes` 的现有实现，扩展时不动它，只把 `pool` 的生成抽到一个新模块 `vault::generator::pool_for`）。
+
+### 17.2 Diceware 词表
+
+`passphrase` 配方使用内置 **EFF 短词表**（~1296 词，CC-BY-SA 3.0）。二进制体积增加 ~10 KB。无运行时网络访问。
+
+- 词数：1..=10（默认 5）；entropy ≈ log₂(1296ⁿ) = 10.34·n 比特。
+- 分隔符：固定 `-`，5 词 ≈ 51.7 比特（与 `--generate-password letters,digits,symbols,32` 的 ~190 比特不在同一量级——明确告诉用户：词组更适合记，不适合机机接口）。
+- 词表来源在 `assets/diceware/eff-short.txt` 随源码分发；构建期 `include_str!` 嵌入。`tests::wordlist_is_nonempty_and_lowercase` 钉住词数 ≥ 1024、全小写、无重复。
+
+### 17.3 强度评分
+
+`recovery status` 与 `akey audit` 用同一份长度启发式（不假装是熵估计——DESIGN.md 不写熵）：
+
+| 长度 | 等级 |
+|---|---|
+| < 8  | too-short |
+| 8..=11 | weak |
+| 12..=15 | fair |
+| 16..=23 | strong |
+| ≥ 24 | very-strong |
+
+词组配方按词数查表（5 词起算 strong）。评分不进日志、不进 `--json`，仅人类通道。
+
+### 17.4 `Password` 一等分类
+
+```rust
+Category::Password => &[("password", Concealed)]   // builtin_fields
+Category::Password => "password"                  // default_secret_field
+```
+
+- 唯一字段 `password`（`Concealed`），无 `url` / `username` / `expires`。它就是单值密码——不需要撑出一个分类骨架。
+- `expires_at` 条目级字段仍然可用（v0.2 已在 `Entry` 上），所以「90 天后这条密码过期」语义不变。
+- `ALL_CATEGORIES` 由 7 升 8；`template list` 自动多一行；`akey get --reveal --json` 路径不变。
+
+### 17.5 审计检查项
+
+`doctor` 增加以下探针（命名稳定，`checks[].name` 即 key）：
+
+| name             | status | 触发 |
+|---|---|---|
+| `weak_secrets`   | warning / ok | 任一 secret 字段：长度 < 8 / 单一字符集 / 命中 ~1000 词常见清单（内置 ~5 KB） |
+| `reused_secrets` | warning / ok | 跨条目同值（用 `field_value_hash`，已存在；不要新算） |
+| `stale_rotations`| warning / ok | `apikey` / `token` 类条目 `rotated_at` 距今 > 365 d 且未被软删 |
+| `expiring`       | （保留） | 已实现，30 天窗口，ok/warning |
+
+新检查默认 `warning`（不致让 doctor 退 1）；只有现存 `error` 等级才让命令非零退出。`weak_secrets` 在所有 `Concealed` / `Notes` / `SshKey` / `Otp` 字段上跑；命中后 `detail` 只列条目名+字段 ID，绝不含值或哈希本身——`tests::audit_check_never_includes_value_or_hash` 钉住。
+
+新增独立命令 `akey audit --json`：列出每条命中，按 `weak | reused | stale | expiring` 分组。`--json` 形状 `{ok:true, data:{weak:[{name,field,reason}], reused:[[name,other]], stale:[{name,days_since_rotation}], expiring:[{name,expires_at}]}}`。任何一处都不含值或哈希。
+
+### 17.6 恢复密码 UX
+
+- `recovery set` / `init --recovery` 接受 `--min-passphrase-len <n>`（默认 12，env `AKEY_RECOVERY_MIN_LEN` 可覆盖）。低于阈值退出 2（**用法错误**，不与「错误密码」混淆——后者退出 4）。
+- `recovery status` 新命令。`{configured: bool, min_length: u16, current_length: u16 | null, strength: "too-short"|"weak"|"fair"|"strong"|"very-strong"}`。**不含密码本身**——`tests::recovery_status_envelope_carries_no_passphrase` 钉住。
+- `recovery rotate` 在 `--min-passphrase-len` 上与 `set` 同源；用旧密码解 `recovery.age`、用新密码重写。
+- 长度阈值上界 1024；下限默认 12，最小允许 8（再低则不是「密码恢复」而是「密码提示」，设计不鼓励）。
+
+### 17.7 `vault.age` 格式：`v1` → `v2`
+
+- `version` 字段从 `1` 升 `2`。
+- v1 → v2 迁移：`version := 2`，条目 / 令牌 / 墓碑集**原样保留**。无 `Category::Password` 条目的 v1 vault 直接升 v2 不丢信息。
+- `merge3` 在 `(v1, v2, v1)` 或 `(v1, v2, v2)` 的合并中，输出 `version = max(ours.version, theirs.version)`，条目集合照旧按 ID 并——空集的一方不会触发迁移错误。
+- `store::load` 在读到 `version: 1` 时调用 `migrate::v1_to_v2` 一次并原地落盘（同步仍由下次 `sync` 触发；这里只**就地**写，不主动 push）。
+- `tests::migration_v1_to_v2_is_identity_on_entries_tokens` 与 `tests::migration_v1_to_v2_bumps_version` 在 `vault::migrate` 模块内。
+
+### 17.8 实现顺序
+
+1. `vault::generator`（含词表 `include_str!`）+ 词组采样 + 池函数。
+2. `vault::migrate::v1_to_v2` + `store::load` 接入；`merge3` 版本取最大。
+3. `Category::Password` 与 `ALL_CATEGORIES`、模板渲染。
+4. `cmd::audit` 与 `admin::doctor` 接入四个新探针。
+5. `cmd::Generate` + `RecoveryCommand::Status` + `cli.rs` 接线；`schema --json` 自动反映。
+6. 双语字符串（每条新的人类可读消息都进 `i18n::m(...)`）。
+7. `cargo test` 全过；`cargo clippy -- -D warnings`；`tests/contract.rs` 钉 JSON 信封。
+
+---
+
+## 18. `gpuix` 桌面 GUI（`akey-gui`）
+
+面向人的桌面界面。技术栈是 **GPUI（Zed 的 GPU 加速 UI 框架，crate `gpui`）**。本节只定义架构与边界；视图清单见 `gui/src/views/`。
+
+### 18.1 为什么是 workspace member，不是 feature
+
+`gpui` 依赖 `wgpu` / Metal / Vulkan / blade 这一整条 GPU 栈。把它做成 CLI crate 的可选 feature 会让两件事同时发生：`cargo build` 的 manifest 里出现 GPU 依赖（审计面扩大），以及 `cargo vendor` / `cargo audit` 的输出被污染。所以：
+
+```toml
+# 根 Cargo.toml
+[workspace]
+members = ["gui"]
+```
+
+- `cargo build`（根目录）→ 只构建 `akey` CLI，依赖图**逐字节不变**。
+- `cargo build -p akey-gui --features gpui` → 构建 GUI。
+- `gui` **不**把 `akey` 当依赖；它通过子进程调用 `akey`。
+
+### 18.2 GUI 的 API 就是 CLI 的 `--json`（子进程，不链接库）
+
+`Output` 直接写 `std::io::stdout()`，没有可注入的 sink。因此「在进程内复用 `cmd::*`」只有两条路，都不该走：
+
+- 给 `Output` 加 sink → 改动 CLI 的输出纪律核心，`contract::*` 一整套测试都在钉它；
+- 在 GUI 里另写一套 reveal / write 闸门 → **违反 FR-4 的三重门必须唯一**。
+
+于是 GUI 与 CLI 的边界是**进程**：
+
+```
+akey-gui ──(std::process::Command)──> akey --json <verb>
+                                      ↑ 闸门在此运行
+```
+
+这条边界有三个好处：
+
+1. **闸门无法被绕过**：`reveal` 走的还是 `get --reveal`，`AKEY_NO_REVEAL` / 令牌 `--deny-reveal` / 条目 `reveal=deny` 照常生效，退出 7。
+2. **契约已被测试钉死**：`--json` 信封是 FR-3 的对外契约，`tests/contract.rs` 在回归它。
+3. **CLI 依赖图零改动**。
+
+代价是每次操作一次进程创建（macOS 上 ~3–5 ms）——对交互式 GUI 无感。
+
+**二进制定位**（顺序）：`$AKEY_GUI_BIN` → `PATH` 上的 `akey` → 报错并给出安装提示。绝不静默退回内置实现。
+
+### 18.3 启动闸门
+
+`main` 在开窗前跑一次 `akey whoami --json`：
+
+| 结果 | 行为 |
+|---|---|
+| `ok` | 进入主界面 |
+| 退出 4（`locked`，无 config） | 显示「本机尚未初始化，请运行 `akey init`」，**不**提供替代初始化向导——初始化要选远端与恢复密码，属于 CLI 的显式动作 |
+| 二进制找不到 | 显示 `$AKEY_GUI_BIN` 提示 |
+
+`doctor --json` 的 `data.checks[]` 里任何 `status: "error"` 会在标题栏挂一个告警点；不阻断（否则设备被吊销时会连只读界面都打不开）。
+
+### 18.4 明文生命周期（FR-31）
+
+GUI **不持久化任何明文**：
+
+- reveal 的结果是一个 `Revealed` 值，只在内存里，同时绑定条目 `id` 与字段 `id`；普通
+  `EntryDetail` 始终保持遮蔽，揭示响应不得替换它；任一时刻最多保留一个字段的明文；
+- 触发丢弃：切换到别的条目、窗口失焦、真正唤醒 UI 的 30 秒定时器、或显式「隐藏」；
+- `Revealed` 不实现 `Debug`（同 `Field` / `Entry` 的理由）；不写 config、不写日志、不进 panic message；
+- 剪贴板写入是**显式动作**（一个按钮），且提示「剪贴板可能被其它程序读取」。
+
+### 18.5 六块界面（对应 README 路线图）
+
+| 界面 | 底层调用 |
+|---|---|
+| 列表 | `akey list --json`（含 `--tags` / `--category` / `--expiring` 过滤） |
+| 详情 + 揭示 | `akey get <item> --json`，reveal 时追加 `--reveal` |
+| 新增 / 编辑 | `akey set <item> --category <c> --stdin`（秘密走子进程 stdin，**永不** argv）；`akey edit` 改元数据 |
+| 同步 | `akey sync --json`；退出 5 → 切到冲突面板（`conflicts --json` + `resolve --ours\|--theirs`） |
+| 设备与令牌 | `akey devices list/trust/untrust/rm`、`akey token create/list/rm` |
+| 恢复密码 | `akey recovery set/rotate/unlock/status` |
+
+### 18.6 目录
+
+```
+gui/
+  Cargo.toml            akey-gui；gpui 是 optional，feature = "gpui"
+  src/
+    main.rs             feature 门：有 gpui 就开窗，没有就说明原因后退出 2
+    lib.rs              导出 backend / model
+    backend.rs          定位二进制、执行、解析信封（**纯逻辑，可测**）
+    model.rs            从 `--json` 载荷反序列化的视图结构（**纯逻辑，可测**）
+    app.rs              Application::new().run（feature = "gpui"）
+    views/
+      list.rs           列表 + 过滤
+      detail.rs         详情 + reveal
+      edit.rs           新增 / 编辑表单
+      sync.rs           同步 + 冲突
+      devices.rs        设备 + 令牌
+      recovery.rs       恢复密码
+```
+
+`backend.rs` 与 `model.rs` 不依赖 `gpui`，因此 `cargo test -p akey-gui`（默认 features）在**没有 Metal 工具链**的机器上也能跑——GUI 的可测部分与渲染部分是分开编译的。
+
+### 18.7 深浅主题与国际化
+
+品牌文档已经定义了两套表面，所以主题不是发明出来的，是**读出来的**：
+
+| | ground | ink |
+|---|---|---|
+| dark | `#0B1220`（navy） | `#F8FAFC`（light） |
+| light | `#F8FAFC` | `#0B1220` |
+
+`#2563EB`（letterform）与 `#06B6D4`（connections）是中调，两套里都保持原位。severity 色（danger/warn/ok）品牌未定义，是唯一的外来色，且已标注。
+
+`theme.rs` **不依赖 `gpui`**：颜色以 `u32` 打包 hex 保存——这正是品牌规范书写它的单位，可直接比较、可精确断言，且无需 GPU 工具链即可测试。视图通过 `views::K` 这一个转换点转成 `Rgba`。
+
+**可读性是属性，不是口味**：测试断言正文在两种外观下都满足 WCAG AA（≥4.5:1），次级文字 ≥3:1，severity 色 ≥3:1，并且半透明 token 会**先与 ground 合成再断言**——未合成的对比度没有意义。这条测试抓到过一个真实缺陷：浅色主题下 `#F8FAFC` 文字压 `#06B6D4` 只有 2.32:1，已改为两种外观都用 navy 压 cyan。
+
+`i18n.rs` 复制 CLI 的设计：消息是**值**（`Msg { en, zh_cn }`）而不是 key，因此不存在「缺翻译」状态；`t!` 宏在编译期校验占位符数量一致。与 CLI 的唯一区别是 GUI 的语言可在运行时切换，所以 `Lang` 存在 app 上而不是进程全局。初始值沿用 CLI 的优先级（`AKEY_LANG` > `LC_ALL` > `LC_MESSAGES` > `LANG` > `en`），并同样区分「显式指定不支持的语言」与「locale 恰好不支持」——后者回退英文而不是拒绝启动。
+
+### 18.8 品牌资产：两个必须知道的实现事实
+
+1. **`Application::new()` 装的资产源是 `()`**，它对任何路径都返回 `None`——所以 `img("assets/brand/…")` 会**静默地什么都不画**。必须用 `Application::with_assets(...)` 装一个真正能读文件的源（`gui/src/assets.rs`）。路径按 `CARGO_MANIFEST_DIR` 解析为绝对路径，否则会随启动目录变化。这条有测试守着（断言两个 lockup 都真实存在）。
+2. **lockup 的背景是烤进 PNG 的**（`#0B1220` / `#F8FAFC`），不是透明的。因此在任何「抬升过的」表面上贴 lockup 都会画出一个可见矩形。页头背景因此**必须是 ground 本身**，而不是 `surface`——这样 lockup 才严丝合缝。品牌文档 rule 2 说的「按表面选变体」正是这件事；`icon-transparent-1024.png` 才是「你自己控制表面时该用的那个」。
