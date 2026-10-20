@@ -55,6 +55,11 @@ src/
   sync/git.rs        git 子进程封装（fetch/show/commit/push/merge-base）
   audit.rs           append-only 日志
   cmd/*.rs           每个命令一个模块
+  agent/
+    registry.rs      harness 表：作用域 / 配置文件 / skill 根 / 原生 CLI
+    config.rs        配置格式适配（JSON/JSONC/TOML/YAML）· 匹配 · 规划 · 原子写
+    skill.rs         内嵌 SKILL.md · sidecar 记账 · --force 语义
+    mod.rs           选择 / 原生委派 / 计划-应用编排 / 报告
 tests/
   contract.rs        信封 / 退出码 / stdout-stderr
   reference.rs       引用解析表驱动
@@ -320,6 +325,10 @@ completion <bash|zsh|fish|powershell>
 export    --format json|dotenv|csv1p [--out-file F] --yes
 import    --format … [-i F] [--merge]
 mcp
+agent     list | status [AGENT]...
+          | install [AGENT]... | --all [--force] [--no-native]
+          | print [AGENT]...
+          # 三个动词都接受 --scope user|project 与 --only all|mcp|skill
 ```
 
 **赋值语句**：`[<section>.]<field>[[<type>]]=<value>`；`<field>` 为已存在字段时改值，否则新建。值为空 → `[delete]` 删除自定义字段。秘密值走 argv 时打印警告并提示用 `--stdin` / `--template`。
@@ -625,3 +634,82 @@ gui/
 
 1. **`Application::new()` 装的资产源是 `()`**，它对任何路径都返回 `None`——所以 `img("assets/brand/…")` 会**静默地什么都不画**。必须用 `Application::with_assets(...)` 装一个真正能读文件的源（`gui/src/assets.rs`）。路径按 `CARGO_MANIFEST_DIR` 解析为绝对路径，否则会随启动目录变化。这条有测试守着（断言两个 lockup 都真实存在）。
 2. **lockup 的背景是烤进 PNG 的**（`#0B1220` / `#F8FAFC`），不是透明的。因此在任何「抬升过的」表面上贴 lockup 都会画出一个可见矩形。页头背景因此**必须是 ground 本身**，而不是 `surface`——这样 lockup 才严丝合缝。品牌文档 rule 2 说的「按表面选变体」正是这件事；`icon-transparent-1024.png` 才是「你自己控制表面时该用的那个」。
+
+---
+
+## 19. Harness 抽象层（`src/agent/`）
+
+`akey mcp` 只提供元数据，但要让它真正被 agent 用上，必须把它注册进每个 harness 的配置，并放一份 `SKILL.md`。如果每个 agent 写一段专用逻辑，代码会变成 N 份几乎相同的安装器；如果抽成 trait，又会把「配置长什么样」这种纯数据藏进 `impl` 里。这里选的是**数据驱动**：harness 是一行数据，配置格式是一个适配器。
+
+### 19.1 三层
+
+| 层 | 文件 | 职责 | 不知道什么 |
+|---|---|---|---|
+| 注册表 | `registry.rs` | harness 的 id / 别名 / 作用域 / 配置候选路径 / 格式 / 入口语法 / skill 根 / 原生 CLI | 不知道文件内容如何解析 |
+| 适配器 | `config.rs` | 按格式读取、匹配、规划、结构化写入 JSON/JSONC/TOML/YAML | 不知道 harness 叫什么 |
+| 编排 | `mod.rs` | 选择、原生委派、计划-应用、报告 | 不知道某个具体 agent 的路径 |
+
+`Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可，不写也能退化为结构化编辑。
+
+`McpStyle` 以**语法**命名（`Claude` / `Codex` / `Hermes` / `OpenCode`），不以 agent 命名：新 harness 往往复用已有语法，而同一个 agent 也可能在不同作用域用不同文件。
+
+### 19.2 两个可安装物
+
+1. **MCP 注册**——让 harness 启动 `akey mcp`。这是「agent 能发现金库」的前提。
+2. **`SKILL.md`**——教 agent 何时用 `akey`、如何用 `run` 交付、以及哪些动作被禁止。没有它，MCP 只告诉 agent「有什么」，不告诉它「该怎么用」。
+
+skill 目录旁的 `.akey-managed` 记录 `tool`、`version`、`sha256`、`installed_at`。安装时：文档相同 → 内容不动（必要时补写 sidecar）；文档不同但 sidecar 匹配 → 说明是旧版本，可升级；文档被本地改过 → 冲突，必须 `--force`。这样既不覆盖用户的修改，也不把 akey 自己的旧版本当成用户修改。
+
+### 19.3 计划先于写入
+
+`install` 先对**所有**选中的 harness 做完整规划，任何一个配置损坏或 skill 冲突都会在写第一个字节之前失败。之后才逐个应用。应用阶段仍可能中途失败（例如第二个 harness 的原生 CLI 退出非零），但每个写入器都是幂等的，重跑同一条命令即可收敛。这是有意的取舍：跨文件事务需要日志与回滚，而幂等重跑不需要。
+
+### 19.4 原生 CLI 只负责「新增」
+
+harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个条目」的语义，也不保证保留注释。规则因此是：
+
+- `Change::Added` 且找到了原生 CLI → 调用它；调用后**重新读取配置**，确认条目真的可用，否则报 `harness` 错误并提示 `--no-native`。
+- `Change::Replaced`（`--force`）→ 永远走结构化编辑。原生 CLI 可能追加第二个同名条目，而不是替换。
+- 原生 CLI 不存在，或传了 `--no-native` → 结构化编辑。
+- 原生 CLI 存在但执行失败 → 直接报 `harness` 错误，**不自动回退**。CLI 可能已经写了一半配置；此时再盲目改文件会把两份修改叠在一起。错误信息给出 `--no-native`，由人决定是清理还是重试。
+
+子进程的 stdout/stderr 一律捕获，stdin 设为 null：harness CLI 的输出不能污染 `akey --json` 的 stdout。
+
+### 19.5 匹配只比较自己拥有的键
+
+`akey` 条目的 `env`、以及用户添加的任意额外键，都不参与匹配——它们不影响 `akey mcp` 的行为，也不该让「已经装好了」变成冲突。比较的是：
+
+- `command` + `args` 必须等价于 `akey mcp`；
+- `type`（若存在）必须是该 harness 认识的 stdio 变体；
+- Hermes / OpenCode 的 `enabled: false` 视为冲突，因为条目存在但不会运行（Claude Code 与 Codex 没有这个字段）。
+
+`--force` 只替换这些拥有的键，保留 `env` 与其他键。JSON 用 `jsonc-parser` 做 CST 编辑，因此注释和尾随逗号不会丢；TOML 用 `toml_edit`，YAML 用 `yaml-edit`，理由相同。
+
+### 19.6 作用域与选择
+
+`user` 写用户主目录，`project` 写当前工作目录（可提交进仓库）。Codex 与 Hermes 只有 user；Claude Code 与 OpenCode 两者都有。
+
+选择规则区分「默认」与「显式」：
+
+- `status` / `print` 不点名 → 选中所有支持该作用域的 harness，静默跳过不支持的。
+- 点名了 `codex --scope project` → 报错。用户既然打了名字，就需要知道 Codex 没有 project 作用域，而不是安静地什么都不做。
+- `install` 必须点名或传 `--all`。不点名就装进机器上所有 harness，是过于意外的副作用。
+
+`AKEY_AGENT_HOME` 可覆盖主目录，`HOME` / `USERPROFILE` 是默认值。它**不是** `AKEY_HOME`：后者是 akey 自己的私有目录（`~/.config/akey`），而 harness 配置在真实主目录里。
+
+### 19.7 新增一个 harness
+
+1. 在 `registry.rs` 的 `HARNESSES` 加一行：id、别名、作用域、配置候选、格式、语法、入口 key、skill 根、原生 CLI、文档链接；有原生 CLI 时再在 `native_args` 补一条 `mcp add` 语法。
+2. 配置格式是新的 → 在 `ConfigFormat` 加变体，并在 `config.rs` 补 inspect / draft 两条分支。
+3. 入口语法是新的 → 在 `McpStyle` 加变体，同样补两条分支。
+4. 在 `docs/AGENT-INTEGRATION.md` 加对应小节，并加一个使用临时 home 的测试。
+
+不需要改 `cmd/agent.rs`，也不需要改报告层。
+
+### 19.8 非目标
+
+- **不安装 akey 本身**。二进制从哪来是安装脚本的事。
+- **不管理凭据**。这一层只写配置与文档。
+- **不读取值**。安装器从不打开金库。
+- **不常驻**。没有 daemon、没有 watcher；`status` 是只读的一次性检查。
+

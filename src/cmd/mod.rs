@@ -14,6 +14,7 @@ use crate::vault::model::{Entry, Reveal, TokenMeta, Vault};
 use crate::vault::store::Store;
 
 pub mod admin;
+pub mod agent;
 pub mod audit;
 pub mod deliver;
 pub mod entries;
@@ -419,6 +420,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
     match command {
         Command::Init(args) => admin::init(ctx, &args),
         Command::Devices(args) => admin::devices(ctx, &args),
+        Command::Agent(args) => agent::run(ctx, &args),
         Command::Recovery(args) => admin::recovery(ctx, &args),
         Command::Token(args) => admin::token(ctx, &args),
         Command::Whoami => admin::whoami(ctx),

@@ -114,6 +114,8 @@ pub enum Command {
     Token(TokenArgs),
     #[command(about = i18n::m("Manage devices", "管理设备"))]
     Devices(DevicesArgs),
+    #[command(about = i18n::m("Install akey into AI agent harnesses", "把 akey 安装进 AI agent harness"))]
+    Agent(AgentArgs),
     #[command(about = i18n::m("Recovery passphrase", "恢复密码"))]
     Recovery(RecoveryArgs),
     #[command(about = i18n::m("Sync with the remote", "与远端同步"))]
@@ -417,6 +419,68 @@ pub enum TokenCommand {
     List,
     #[command(about = i18n::m("Revoke a token", "吊销令牌"))]
     Rm { name: String },
+}
+
+#[derive(Debug, Args)]
+pub struct AgentArgs {
+    #[command(subcommand)]
+    pub command: AgentCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AgentCommand {
+    #[command(about = i18n::m("List supported harnesses and where akey installs into them", "列出支持的 harness 及 akey 的安装位置"))]
+    List,
+    #[command(about = i18n::m("Show MCP and skill status (defaults to every harness)", "查看 MCP 与 skill 状态（缺省为全部 harness）"))]
+    Status(AgentStatusArgs),
+    #[command(about = i18n::m("Install the MCP server and SKILL.md into one or more harnesses", "把一个或多个 harness 装上 MCP 服务与 SKILL.md"))]
+    Install(AgentInstallArgs),
+    #[command(about = i18n::m("Print the MCP snippet and SKILL.md without writing anything", "只输出 MCP 片段与 SKILL.md，不写任何文件"))]
+    Print(AgentStatusArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AgentStatusArgs {
+    #[arg(
+        help = i18n::m("Harness ids (default: every harness that supports the scope)", "harness 标识（缺省为支持该范围的全部 harness）"),
+        value_name = "AGENT")]
+    pub agents: Vec<String>,
+    #[arg(
+        help = i18n::m("Install scope", "安装范围"),
+        long, value_enum, default_value_t = crate::agent::Scope::User)]
+    pub scope: crate::agent::Scope,
+    #[arg(
+        help = i18n::m("Which artifacts to inspect", "要检查的产物"),
+        long, value_enum, default_value_t = crate::agent::Only::All)]
+    pub only: crate::agent::Only,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentInstallArgs {
+    #[arg(
+        help = i18n::m("Harness ids (or use --all)", "harness 标识（或使用 --all）"),
+        value_name = "AGENT")]
+    pub agents: Vec<String>,
+    #[arg(
+        help = i18n::m("Install into every harness that supports the scope", "安装到支持该范围的全部 harness"),
+        long)]
+    pub all: bool,
+    #[arg(
+        help = i18n::m("Install scope", "安装范围"),
+        long, value_enum, default_value_t = crate::agent::Scope::User)]
+    pub scope: crate::agent::Scope,
+    #[arg(
+        help = i18n::m("Which artifacts to install", "要安装的产物"),
+        long, value_enum, default_value_t = crate::agent::Only::All)]
+    pub only: crate::agent::Only,
+    #[arg(
+        help = i18n::m("Replace a conflicting entry or a skill that was edited", "替换冲突条目或被编辑过的 skill"),
+        long)]
+    pub force: bool,
+    #[arg(
+        help = i18n::m("Edit config files directly instead of calling the harness CLI", "直接改配置文件，不调用 harness CLI"),
+        long)]
+    pub no_native: bool,
 }
 
 #[derive(Debug, Args)]

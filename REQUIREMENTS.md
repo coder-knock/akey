@@ -118,7 +118,7 @@
 
 **FR-1 凭证条目**：`id`(26 位 ULID，稳定) · `name`(唯一，`^[a-z0-9][a-z0-9._-]*$`) · `category` · `title` · `fields[]`（每个含 `label`/`type`/`concealed`/`value`/`section`）· `tags[]` · `favorite` · `url` · `notes` · `expires_at` · `reveal`(allow|deny) · `created_at`/`updated_at`/`rotated_at`/`last_used_at`/`deleted_at`
 
-**FR-2 命令面**：`init` · `read` · `run` · `inject` · `get` · `set` · `edit` · `rm` · `restore` · `cp` · `mv` · `list` · `template` · `doc` · `token` · `devices` · `recovery` · `sync` · `conflicts` · `resolve` · `log` · `whoami` · `doctor` · `schema` · `completion` · `export` / `import` · `mcp`
+**FR-2 命令面**：`init` · `read` · `run` · `inject` · `get` · `set` · `edit` · `rm` · `restore` · `cp` · `mv` · `list` · `template` · `doc` · `token` · `devices` · `recovery` · `sync` · `conflicts` · `resolve` · `log` · `whoami` · `doctor` · `schema` · `completion` · `export` / `import` · `mcp` · `agent`
 
 **FR-3 机器可读契约（MUST）**
 - 全局 `--json`（= `--format json`），统一信封 `{"ok":true,"data":…}` / `{"ok":false,"error":{code,message,hint}}`
@@ -195,6 +195,14 @@
 - 新增 `Category::Password`，内置字段 `password` (Concealed)，默认秘密字段 `password`。
 - `ALL_CATEGORIES` 升 7 → 8；`template list` 自动多一行。
 - `vault.age` 由 `version: 1` 升 `version: 2`；迁移 `vault::migrate::v1_to_v2` 是 entry/token/tombstone 的恒等映射（DESIGN §17.7）。
+
+**FR-32 Harness 安装（MUST）** — 见 DESIGN §19。
+- `akey agent list|status|install|print`；内置 Claude Code / Codex / Hermes Agent / OpenCode，别名与作用域由注册表给出。
+- harness 是**数据行**而非 `impl`：配置文件、格式（JSON/JSONC/TOML/YAML）、MCP 语法、skill 根、原生 CLI 都在注册表中声明；新增 harness 不改安装流程。
+- 安装两件产物：MCP 注册（让 harness 启动 `akey mcp`）与内嵌 `SKILL.md`（教 agent 何时用、如何用）。sidecar 记录版本与哈希；被本地改过的 skill 需 `--force`。
+- **先规划后写入**：任一 harness 的配置损坏或 skill 冲突都会在写第一个字节前失败；每个写入器幂等，重跑即可收敛。
+- 原生 CLI 只用于**新增**条目；替换一律走结构化配置编辑。CLI 不存在或传 `--no-native` 时直接改配置；CLI 存在但失败时报 `harness` 错误并提示 `--no-native`，**不自动回退**。
+- 只读命令（`status` / `print`）不点名时覆盖所有支持所选作用域的 harness；`install` 必须点名或加 `--all`。安装不要求 vault 已初始化，但受写闸门约束（`--dry-run` 除外）。
 
 ---
 
@@ -365,6 +373,9 @@ akey set github --category login --title GitHub username=me password-stdin
 akey list --tags llm --json
 akey sync --json
 akey token create --name ci --allow openai,tavily --deny-reveal --ttl 30d
+akey agent install --all                 # 把 MCP 与 SKILL.md 装进本机 harness
+akey agent install claude-code --scope project
+akey agent status --json                 # 只读：装了什么、哪里漂移
 ```
 
 ## 13. 分期

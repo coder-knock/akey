@@ -2024,6 +2024,7 @@ mod tests {
             "doc",
             "token",
             "devices",
+            "agent",
             "recovery",
             "sync",
             "conflicts",

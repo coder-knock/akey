@@ -195,6 +195,31 @@ It offers `akey_list` (the inventory) and `akey_get` (field names, types and ref
 entry). To actually use a secret, still go through `akey run` (§6.2) — MCP answers "what is there",
 `run` answers "use it".
 
+#### Let akey install itself
+
+Rather than hand-writing that JSON, install the registration — plus a `SKILL.md` that teaches the
+harness how to use the vault — with one command:
+
+```bash
+akey agent list                         # supported harnesses, ids, scopes, target paths
+akey agent install claude-code codex    # or --all
+akey agent status                       # per-harness MCP + skill state
+akey agent print claude                 # exact snippet + skill, writes nothing
+```
+
+Supported today: Claude Code (`claude-code`), Codex (`codex`), Hermes Agent (`hermes`), and
+OpenCode (`opencode`). `claude-code` and `opencode` also support `--scope project`, which writes
+into the current repository (`.mcp.json`, `.agents/skills/akey`, …) instead of the user's home
+directory. `--only mcp` or `--only skill` installs a single artifact; `--no-native` skips the
+harness CLI and edits config files directly.
+
+Every selected harness is planned before anything is written, so a corrupt config or a conflicting
+skill fails the whole run instead of leaving a half-installed set. Matching entries are left alone;
+a differing `akey` entry or a locally modified skill is a conflict, resolved with `--force`. JSON,
+JSONC, TOML, and YAML files are edited structurally, so comments and unrelated keys survive.
+
+The registration launches `akey mcp`, so `akey` must be on the harness's `PATH`.
+
 ### 6.2 Wrapping a child process (universal)
 
 ```bash

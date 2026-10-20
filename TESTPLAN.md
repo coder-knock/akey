@@ -177,3 +177,20 @@ GUI 的渲染层（GPUI）与逻辑层分开编译：`backend` / `model` 不依�
 | FR-31 argv | `backend::write_path_never_places_a_value_in_argv` | U | `set` 的调用参数列表里不含用户输入的值 |
 | FR-27 写失败 | `verbs::mutation_failures_are_not_reported_as_rust_success` | U | CLI 非零退出不会被 GUI 当成成功状态 |
 | FR-26 依赖图 | `contract::cli_dependency_graph_is_unaffected_by_the_gui` | C | 根 crate 的 `Cargo.toml` 不含 `gpui`；`[workspace] members = ["gui"]` 存在 |
+
+### 6.2 Harness 安装（v0.2 增补）
+
+`agent::*` 单元测试全部使用临时 HOME，且以 `NativeMode::Disabled` 或 `NativeMode::Path`
+注入伪 CLI，**从不调用**开发者本机真实的 `claude` / `codex` / `hermes` / `opencode`。
+
+| 需求 | 测试 | 层 | 断言什么 |
+|---|---|---|---|
+| FR-32 | `agent::installing_twice_changes_nothing_the_second_time` | U | 第二次安装 `changed=false`，MCP 与 skill 均为 `unchanged` |
+| FR-32 全有或全无 | `agent::a_conflict_on_any_harness_stops_the_whole_install` | U | 任一 harness 有冲突条目 → 另一个 harness 的文件也未被写 |
+| FR-32 原生边界 | `agent::the_native_cli_is_not_used_to_replace_an_entry` | U | 仅 `Added` 走原生 CLI；`Replaced` 走结构化配置编辑 |
+| FR-32 原生核实 | `agent::a_harness_cli_that_writes_nothing_is_not_believed` | U | CLI 退 0 但配置仍无可用条目 → `harness` 错误 |
+| FR-32 共享 skill | `agent::a_shared_skill_is_counted_once_in_the_install_total` | U | Codex + OpenCode 共用 `~/.agents/skills` 时总数按真实文件计 |
+| FR-32 打印一致 | `agent::printed_snippets_are_byte_identical_to_a_fresh_install` | U | `agent print` 的片段与首次安装写入的字节一致 |
+| FR-32 无 vault | `contract::agent_install_works_without_a_vault_and_is_idempotent` | C | 未初始化也可安装；重跑幂等；stdout 仍是单信封 |
+| FR-32 选择 | `contract::agent_install_requires_a_selection` | C | 不点名且无 `--all` → exit 2（`usage`） |
+| FR-32 文档覆盖 | `contract::agent_documentation_covers_every_command` | C | README 的命令索引包含 `agent` |

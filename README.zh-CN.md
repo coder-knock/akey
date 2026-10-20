@@ -93,6 +93,34 @@ akey init --from git@github.com:you/akey-vault.git --device laptop   # 会问恢
 akey devices trust laptop
 ```
 
+## 接入你用的 agent
+
+`akey` 说 MCP，而且能把自己——连同教 agent 怎么用金库的 `SKILL.md`——注册进你已经在跑的 harness：
+
+```bash
+akey agent list                        # 支持哪些 harness，文件会落到哪里
+akey agent install --all               # 能装的都装上 MCP server + skill
+akey agent install claude-code codex   # 或者只点名你要用的
+akey agent status                      # 装了什么，哪里漂移了
+akey agent print claude                # 打印准确内容，不写任何文件
+```
+
+| Harness | Id | 作用域 |
+|---|---|---|
+| Claude Code | `claude-code` | user、project |
+| Codex | `codex` | user |
+| Hermes Agent | `hermes` | user |
+| OpenCode | `opencode` | user、project |
+
+安装器优先调用各 harness 自己的 CLI（`claude mcp add`、`codex mcp add`、`hermes mcp add`、
+`opencode mcp add`），CLI 未安装时直接改配置文件。若 CLI 存在但执行失败，安装会中止并提示改用
+`--no-native`，而不是在一个可能写了一半的配置上继续猜。`--scope project` 写进当前仓库而不是
+主目录，仅对支持该作用域的 harness 生效。重复执行是幂等的——已存在的冲突条目或被手工改过的
+skill 需要 `--force`。因为 harness 启动的是 `akey mcp`，`akey` 二进制必须留在 `PATH` 上。
+
+MCP 只提供元数据：它告诉 agent 有什么，永不返回值。真正使用密钥仍然走 `akey run`，
+把值交给需要它的子进程。
+
 ## 命令一览
 
 | 类别 | 命令 |
@@ -100,6 +128,7 @@ akey devices trust laptop
 | 生命周期 | `init` · `devices` · `recovery` · `token` · `sync` · `conflicts` · `resolve` |
 | 条目 | `get` · `set` · `edit` · `rm` · `restore` · `cp` · `mv` · `list` · `template` · `doc` |
 | 交付（给 agent） | `run` · `inject` · `read` · `mcp` |
+| 接入 harness | `agent` |
 | 运维 | `whoami` · `doctor` · `log` · `generate` · `audit` · `schema` · `completion` |
 | 迁移 | `export` · `import` |
 

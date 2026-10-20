@@ -96,6 +96,37 @@ akey init --from git@github.com:you/akey-vault.git --device laptop   # asks for 
 akey devices trust laptop
 ```
 
+## Wire it into your agents
+
+`akey` speaks MCP, and it will register itself — plus a `SKILL.md` that teaches the agent how to
+use the vault — into the harnesses you already run:
+
+```bash
+akey agent list                        # what is supported, and where files go
+akey agent install --all               # MCP server + skill, everywhere it can
+akey agent install claude-code codex   # or name only the harnesses you use
+akey agent status                      # what is installed, and what drifted
+akey agent print claude                # exact bytes, writes nothing
+```
+
+| Harness | Id | Scopes |
+|---|---|---|
+| Claude Code | `claude-code` | user, project |
+| Codex | `codex` | user |
+| Hermes Agent | `hermes` | user |
+| OpenCode | `opencode` | user, project |
+
+The installer prefers each harness's own CLI (`claude mcp add`, `codex mcp add`, `hermes mcp add`,
+`opencode mcp add`) and edits the config file directly when that CLI is not installed. If the CLI
+is present but fails, the install aborts and points at `--no-native` rather than guessing at a
+half-written config. `--scope project` writes into the current repository instead of your home
+directory, for harnesses that support it. Re-running is idempotent — a conflicting entry or a
+hand-edited skill needs `--force`. Because harnesses launch `akey mcp`, the `akey` binary must stay
+on `PATH`.
+
+MCP is metadata-only: it tells an agent what exists and never returns a value. Agents still use
+`akey run` to hand a secret to the child process that needs it.
+
 ## Command index
 
 | | Commands |
@@ -103,6 +134,7 @@ akey devices trust laptop
 | Lifecycle | `init` · `devices` · `recovery` · `token` · `sync` · `conflicts` · `resolve` |
 | Entries | `get` · `set` · `edit` · `rm` · `restore` · `cp` · `mv` · `list` · `template` · `doc` |
 | Delivery (for agents) | `run` · `inject` · `read` · `mcp` |
+| Harnesses | `agent` |
 | Operations | `whoami` · `doctor` · `log` · `generate` · `audit` · `schema` · `completion` |
 | Migration | `export` · `import` |
 

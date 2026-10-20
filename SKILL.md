@@ -127,6 +127,9 @@ plaintext fetch. Do not try — these cannot succeed by design.
 stdio, newline-delimited JSON-RPC 2.0; only `akey_list` and `akey_get`, and it **never returns a
 value**. It answers "what is there"; `akey run` answers "use it".
 
+If this harness has not been wired up yet, a human can run `akey agent install <harness>` once
+(`--all` for every supported harness). It registers the server above and installs this skill.
+
 ## Working with other devices
 
 ```bash

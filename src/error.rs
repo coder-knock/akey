@@ -34,6 +34,22 @@ pub enum Error {
     #[error("{0}")]
     Conflict(String),
 
+    /// A harness already owns the `akey` name with a different entry. Exit 5.
+    ///
+    /// Same public code as [`Error::Conflict`], but a different remediation: a sync
+    /// conflict is resolved through `akey conflicts`, while an install conflict is
+    /// resolved with `--force` (or by editing the harness config).
+    #[error("{0}")]
+    AgentConflict(String),
+
+    /// A harness's own CLI failed, or reported success without writing the expected entry.
+    ///
+    /// Kept distinct from [`Error::AgentConflict`] because the next step is different: there
+    /// is no conflicting entry to force past, only an unreliable native writer. Rerunning
+    /// with `--no-native` edits the harness config directly. Exit 1.
+    #[error("{0}")]
+    Harness(String),
+
     /// git or remote operation failed. Exit 6.
     #[error("{0}")]
     SyncFailed(String),
@@ -73,7 +89,8 @@ impl Error {
             Error::NotFound(_) => "not_found",
             Error::Ambiguous(_) => "ambiguous",
             Error::Locked(_) | Error::Uninitialized(_) => "locked",
-            Error::Conflict(_) => "conflict",
+            Error::Conflict(_) | Error::AgentConflict(_) => "conflict",
+            Error::Harness(_) => "harness",
             Error::SyncFailed(_) => "sync_failed",
             Error::Denied(_) => "denied",
             Error::TokenScope(_) => "token_scope",
@@ -90,7 +107,7 @@ impl Error {
             Error::Usage(_) => 2,
             Error::NotFound(_) | Error::Ambiguous(_) => 3,
             Error::Locked(_) | Error::Uninitialized(_) => 4,
-            Error::Conflict(_) => 5,
+            Error::Conflict(_) | Error::AgentConflict(_) => 5,
             Error::SyncFailed(_) => 6,
             Error::Denied(_) => 7,
             Error::TokenScope(_) => 8,
@@ -98,6 +115,7 @@ impl Error {
             | Error::Crypto(_)
             | Error::Corrupt(_)
             | Error::Git(_)
+            | Error::Harness(_)
             | Error::Unsupported(_) => 1,
         }
     }
@@ -123,6 +141,14 @@ impl Error {
             Error::Conflict(_) => Some(crate::i18n::m(
                 "run `akey conflicts` then `akey resolve <name> --ours|--theirs`",
                 "先运行 `akey conflicts`，再 `akey resolve <name> --ours|--theirs`",
+            )),
+            Error::AgentConflict(_) => Some(crate::i18n::m(
+                "rerun with `--force` to replace the existing entry, or remove it in the harness config",
+                "加 `--force` 重新运行以替换现有条目，或在 harness 配置里手动删除",
+            )),
+            Error::Harness(_) => Some(crate::i18n::m(
+                "rerun with `--no-native` to edit the harness config directly",
+                "加 `--no-native` 重新运行，直接修改 harness 配置文件",
             )),
             Error::Denied(_) => Some(crate::i18n::m(
                 "inject with `akey run` instead of reading the value",
@@ -170,6 +196,10 @@ impl Error {
     pub fn denied(msg: impl Into<String>) -> Self {
         Error::Denied(msg.into())
     }
+
+    pub fn harness(msg: impl Into<String>) -> Self {
+        Error::Harness(msg.into())
+    }
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -210,6 +240,8 @@ mod tests {
             (Error::Locked("x".into()), 4, "locked"),
             (Error::Uninitialized("x".into()), 4, "locked"),
             (Error::Conflict("x".into()), 5, "conflict"),
+            (Error::AgentConflict("x".into()), 5, "conflict"),
+            (Error::Harness("x".into()), 1, "harness"),
             (Error::SyncFailed("x".into()), 6, "sync_failed"),
             (Error::Denied("x".into()), 7, "denied"),
             (Error::TokenScope("x".into()), 8, "token_scope"),

@@ -1328,3 +1328,52 @@ fn only_schema_json_follows_the_language() {
         );
     }
 }
+
+// --------------------------------------------------------------- agent harness installation
+
+/// `akey agent` is setup, not vault access: it must work before `init`, write only into the
+/// user's harness directories, and converge when run twice. An agent that has no vault yet
+/// should still be able to wire itself up.
+#[test]
+fn agent_install_works_without_a_vault_and_is_idempotent() {
+    let device = Device::blank();
+
+    let first = device.json_ok(&["agent", "install", "claude-code", "--no-native"]);
+    assert_eq!(first["changed"], true);
+    let row = &first["harnesses"][0];
+    assert_eq!(row["id"], "claude-code");
+    assert_eq!(row["mcp"]["change"], "added");
+    assert_eq!(row["mcp"]["via"], "config");
+    assert_eq!(row["skill"]["change"], "installed");
+
+    assert!(device.home_path().join(".claude.json").is_file());
+    assert!(
+        device
+            .home_path()
+            .join(".claude/skills/akey/SKILL.md")
+            .is_file()
+    );
+
+    let second = device.json_ok(&["agent", "install", "claude-code", "--no-native"]);
+    assert_eq!(second["changed"], false);
+    assert_eq!(second["harnesses"][0]["mcp"]["change"], "unchanged");
+    assert_eq!(second["harnesses"][0]["skill"]["change"], "unchanged");
+
+    let status = device.json_ok(&["agent", "status", "claude-code"]);
+    assert_eq!(status["ready"], true);
+}
+
+/// Naming no harness is a typo far more often than a request to install everywhere. The
+/// refusal must be a usage error, not a silent `--all`.
+#[test]
+fn agent_install_requires_a_selection() {
+    let device = Device::blank();
+    let (code, error, _) = device.expect_failure(&["agent", "install", "--no-native"]);
+    assert_eq!(code, 2);
+    assert_eq!(error, "usage");
+
+    let (code, error, _) =
+        device.expect_failure(&["agent", "install", "claude-code", "--all", "--no-native"]);
+    assert_eq!(code, 2);
+    assert_eq!(error, "usage");
+}

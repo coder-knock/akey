@@ -9,6 +9,7 @@
 // `{:?}` print them out in passing.
 #![cfg_attr(test, allow(clippy::err_expect))]
 
+pub mod agent;
 pub mod agents_md;
 pub mod audit;
 pub mod cli;

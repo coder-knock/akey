@@ -177,6 +177,29 @@ akey run --with OTP=akey://github/one-time-password?attribute=otp -- ./login.sh
 它提供 `akey_list`（条目清单）与 `akey_get`（某条目的字段名/类型/reference）。
 要真用密钥，仍然走 `akey run`（§6.2）——MCP 负责"知道有什么"，`run` 负责"用起来"。
 
+#### 让 akey 自己装
+
+不用手写上面那段 JSON：一条命令就能把注册信息，连同教 harness 怎么用金库的 `SKILL.md`，
+一起装进去：
+
+```bash
+akey agent list                         # 支持的 harness、id、作用域、目标路径
+akey agent install claude-code codex    # 或者 --all
+akey agent status                       # 每个 harness 的 MCP + skill 状态
+akey agent print claude                 # 打印准确内容，不写任何文件
+```
+
+目前支持：Claude Code（`claude-code`）、Codex（`codex`）、Hermes Agent（`hermes`）、
+OpenCode（`opencode`）。其中 `claude-code` 与 `opencode` 还支持 `--scope project`，
+写进当前仓库（`.mcp.json`、`.agents/skills/akey` 等）而不是用户主目录。`--only mcp` /
+`--only skill` 只装其中一件；`--no-native` 跳过 harness CLI，直接改配置文件。
+
+所有选中的 harness 会先全部规划、再开始写，因此某个配置损坏或 skill 冲突会让整次安装失败，
+而不会留下装了一半的状态。已匹配的条目原样保留；`akey` 条目内容不同、或 skill 被本地改过，
+都算冲突，用 `--force` 覆盖。JSON、JSONC、TOML、YAML 都是结构化编辑，注释与无关键不会丢。
+
+注册信息启动的是 `akey mcp`，所以 `akey` 必须在 harness 的 `PATH` 上。
+
 ### 6.2 包装子进程（通用）
 
 ```bash
