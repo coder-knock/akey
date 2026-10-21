@@ -197,11 +197,12 @@
 - `vault.age` 由 `version: 1` 升 `version: 2`；迁移 `vault::migrate::v1_to_v2` 是 entry/token/tombstone 的恒等映射（DESIGN §17.7）。
 
 **FR-32 Harness 安装与卸载（MUST）** — 见 DESIGN §19。
-- `akey agent list|status|install|uninstall|print`；内置 Claude Code / Codex / Hermes Agent / OpenCode，别名与作用域由注册表给出。
-- harness 是**数据行**而非 `impl`：配置文件、格式（JSON/JSONC/TOML/YAML）、MCP 语法、skill 根、原生 CLI 都在注册表中声明；新增 harness 不改安装流程。
+- `akey agent list|status|install|uninstall|print`；内置 Claude Code / Codex / Cursor / Hermes Agent / OpenCode / Kiro / Devin，别名与作用域由注册表给出。
+- harness 是**数据行**而非 `impl`：配置文件、格式（JSON/JSONC/TOML/YAML）、MCP 语法、skill 根、可选原生 CLI 都在注册表中声明；新增 harness 不改安装流程。
+- 没有可委托 CLI 的 harness（Cursor / Kiro / Devin）使用纯 stdio 条目 `{"command":"akey","args":["mcp"]}`，不写 `type`，且 `disabled: true` 视为冲突。
 - 安装两件产物：MCP 注册（让 harness 启动 `akey mcp`）与内嵌 `SKILL.md`（教 agent 何时用、如何用）。sidecar 记录版本与哈希；被本地改过的 skill 需 `--force`。
 - **先规划后写入**：任一 harness 的配置损坏或 skill 冲突都会在写第一个字节前失败；每个写入器幂等，重跑即可收敛。
-- 原生 CLI 只用于**新增**条目；替换一律走结构化配置编辑。CLI 不存在或传 `--no-native` 时直接改配置；CLI 存在但失败时报 `harness` 错误并提示 `--no-native`，**不自动回退**。
+- 原生 CLI 只用于**新增**条目；替换一律走结构化配置编辑。没有原生 CLI、CLI 不存在或传 `--no-native` 时直接改配置；CLI 存在但失败时报 `harness` 错误并提示 `--no-native`，**不自动回退**。
 - 卸载镜像安装：只移除 akey 写入的 MCP 条目与 skill，**不删除配置文件**；缺失条目视为 no-op，内容不同或 skill 被改过需 `--force`。与安装一样先规划后应用，共享 skill（Codex / OpenCode）按真实文件去重并提示影响范围。
 - 只读命令（`status` / `print`）不点名时覆盖所有支持所选作用域的 harness；`install` / `uninstall` 必须点名或加 `--all`。两者都不要求 vault 已初始化，但受写闸门约束（`--dry-run` 除外）。
 

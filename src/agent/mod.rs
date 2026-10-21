@@ -167,11 +167,12 @@ pub enum NativeMode<'a> {
 impl NativeMode<'_> {
     /// The harness executable this mode would run, if any.
     fn program(&self, harness: &Harness) -> Option<PathBuf> {
+        let name = harness.native_cli?;
         match self {
             NativeMode::Disabled => None,
-            NativeMode::Path(path) => registry::find_in_path_in(harness.native_cli, path),
+            NativeMode::Path(path) => registry::find_in_path_in(name, path),
             NativeMode::Auto if registry::native_disabled() => None,
-            NativeMode::Auto => registry::find_in_path(harness.native_cli),
+            NativeMode::Auto => registry::find_in_path(name),
         }
     }
 }
@@ -378,7 +379,8 @@ pub struct SkillStatus {
 
 #[derive(Debug, Serialize)]
 pub struct NativeStatus {
-    pub command: &'static str,
+    /// `None` for config-only harnesses, which have no CLI akey can delegate to.
+    pub command: Option<&'static str>,
     pub found: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
@@ -431,7 +433,8 @@ pub struct HarnessInfo {
     pub project_skill: Option<&'static str>,
     /// Other harnesses that read the same user skill root.
     pub user_skill_shared_with: Vec<&'static str>,
-    pub native_cli: &'static str,
+    /// `None` when the harness is supported through config editing only.
+    pub native_cli: Option<&'static str>,
     pub note: &'static str,
     pub docs: &'static str,
 }
@@ -497,7 +500,10 @@ impl ListReport {
                 harness.config_format
             );
             let _ = writeln!(out, "  skill    {}", skill_label(harness));
-            let _ = writeln!(out, "  native   {}", harness.native_cli);
+            let native = harness.native_cli.map(str::to_string).unwrap_or_else(|| {
+                crate::msg!("none (edits the config directly)", "无（直接编辑配置）")
+            });
+            let _ = writeln!(out, "  native   {native}");
             let _ = writeln!(out, "  note     {}", harness.note);
             if !harness.user_skill_shared_with.is_empty() {
                 let _ = writeln!(
@@ -683,21 +689,23 @@ impl StatusReport {
                     let _ = writeln!(out, "          {detail}");
                 }
             }
-            let _ = writeln!(
-                out,
-                "  {:<8}{:<12}{}",
-                "native",
-                if row.native.found {
-                    crate::msg!("found", "已找到")
-                } else {
-                    crate::msg!("missing", "未找到")
-                },
-                row.native
-                    .path
-                    .as_deref()
-                    .map(|path| display_path(path, home))
-                    .unwrap_or_else(|| row.native.command.to_string())
-            );
+            if let Some(command) = row.native.command {
+                let _ = writeln!(
+                    out,
+                    "  {:<8}{:<12}{}",
+                    "native",
+                    if row.native.found {
+                        crate::msg!("found", "已找到")
+                    } else {
+                        crate::msg!("missing", "未找到")
+                    },
+                    row.native
+                        .path
+                        .as_deref()
+                        .map(|path| display_path(path, home))
+                        .unwrap_or_else(|| command.to_string())
+                );
+            }
         }
 
         let ready = self
@@ -914,7 +922,7 @@ fn apply_harness(
                     return Err(crate::error::Error::harness(crate::msg!(
                         "`{}` exited successfully but {} still has no usable `akey` MCP entry: {}",
                         "`{}` 已成功退出，但 {} 中仍没有可用的 `akey` MCP 条目：{}",
-                        harness_plan.harness.native_cli,
+                        harness_plan.harness.native_cli.unwrap_or("harness CLI"),
                         inspection.path.display(),
                         detail
                     )));
@@ -1546,7 +1554,15 @@ mod tests {
                 .iter()
                 .map(|harness| harness.id)
                 .collect::<Vec<_>>(),
-            vec!["claude-code", "codex", "hermes", "opencode"]
+            vec![
+                "claude-code",
+                "codex",
+                "cursor",
+                "hermes",
+                "opencode",
+                "kiro",
+                "devin"
+            ]
         );
     }
 
@@ -1585,7 +1601,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             targets.iter().map(|harness| harness.id).collect::<Vec<_>>(),
-            vec!["claude-code", "opencode"]
+            vec!["claude-code", "cursor", "opencode", "kiro", "devin"]
         );
     }
 
@@ -1620,7 +1636,7 @@ mod tests {
         .unwrap();
 
         assert!(!report.ready);
-        assert_eq!(report.harnesses.len(), 4);
+        assert_eq!(report.harnesses.len(), 7);
         for row in &report.harnesses {
             assert_eq!(row.mcp.as_ref().unwrap().status, "missing");
             assert_eq!(row.skill.as_ref().unwrap().status, "missing");

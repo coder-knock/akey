@@ -182,6 +182,8 @@ GUI 的渲染层（GPUI）与逻辑层分开编译：`backend` / `model` 不依�
 
 `agent::*` 单元测试全部使用临时 HOME，且以 `NativeMode::Disabled` 或 `NativeMode::Path`
 注入伪 CLI，**从不调用**开发者本机真实的 `claude` / `codex` / `hermes` / `opencode`。
+Cursor / Kiro / Devin 没有原生写入器，测试同时断言它们的 `native_cli` 为 `None`，
+安装路径不会寻找可执行文件。
 
 | 需求 | 测试 | 层 | 断言什么 |
 |---|---|---|---|
@@ -190,6 +192,8 @@ GUI 的渲染层（GPUI）与逻辑层分开编译：`backend` / `model` 不依�
 | FR-32 原生边界 | `agent::the_native_cli_is_not_used_to_replace_an_entry` | U | 仅 `Added` 走原生 CLI；`Replaced` 走结构化配置编辑 |
 | FR-32 原生核实 | `agent::a_harness_cli_that_writes_nothing_is_not_believed` | U | CLI 退 0 但配置仍无可用条目 → `harness` 错误 |
 | FR-32 共享 skill | `agent::a_shared_skill_is_counted_once_in_the_install_total` | U | Codex + OpenCode 共用 `~/.agents/skills` 时总数按真实文件计 |
+| FR-32 纯 stdio | `agent::config::tests::plain_entries_have_no_type_and_reject_disabled` | U | Cursor / Kiro / Devin 写入 `command`+`args` 且无 `type`；`disabled: true` 冲突，`--force` 后消失 |
+| FR-32 原生可选 | `agent::registry::tests::config_only_harnesses_have_no_native_writer` | U | 注册表声明 `native_cli` 与 `native_args` 一致；三个新 harness 均为 `None` |
 | FR-32 打印一致 | `agent::printed_snippets_are_byte_identical_to_a_fresh_install` | U | `agent print` 的片段与首次安装写入的字节一致 |
 | FR-32 卸载镜像 | `agent::uninstall_removes_everything_install_wrote_and_is_idempotent` | U | 安装写的内容全部移除；配置文件保留；重跑 `changed=false` |
 | FR-32 卸载共享 skill | `agent::uninstall_deduplicates_a_shared_skill_and_warns_about_it` | U | Codex + OpenCode 共用的 skill 只删一次，行级报告带 `shared_with` |
@@ -200,6 +204,7 @@ GUI 的渲染层（GPUI）与逻辑层分开编译：`backend` / `model` 不依�
 | FR-32 配置移除边界 | `agent::config::tests::uninstall_never_rewrites_a_malformed_file` | U | 配置无法解析 → 报错且文件字节不变 |
 | FR-32 skill 移除边界 | `agent::skill::tests::uninstall_requires_force_for_an_unmanaged_skill_and_keeps_foreign_files` | U | 非 akey 的 skill / sidecar 不动，需 `--force` |
 | FR-32 无 vault | `contract::agent_install_works_without_a_vault_and_is_idempotent` | C | 未初始化也可安装；重跑幂等；stdout 仍是单信封 |
+| FR-32 纯 stdio 契约 | `contract::agent_install_supports_plain_stdio_harnesses` | C | Cursor / Kiro / Devin 无需原生 CLI 即可安装；配置无 `type`；`status` 报 `native.command = null`；卸载保留配置文件 |
 | FR-32 卸载契约 | `contract::agent_uninstall_removes_only_its_own_artifacts_and_is_idempotent` | C | 只删自己的产物；配置文件保留；重跑 no-op；JSON 键稳定 |
 | FR-32 选择 | `contract::agent_install_requires_a_selection` · `contract::agent_uninstall_requires_a_selection` | C | 不点名且无 `--all` → exit 2（`usage`） |
 | FR-32 文档覆盖 | `contract::agent_documentation_covers_every_command` | C | README 的命令索引包含 `agent` |

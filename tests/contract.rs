@@ -1363,6 +1363,58 @@ fn agent_install_works_without_a_vault_and_is_idempotent() {
     assert_eq!(status["ready"], true);
 }
 
+/// Cursor, Kiro, and Devin have no CLI akey can delegate to. Their install path must write
+/// the plain stdout shape those hosts document, omit the `type` discriminator, and never
+/// fail merely because no harness executable is on `PATH`.
+#[test]
+fn agent_install_supports_plain_stdio_harnesses() {
+    let device = Device::blank();
+    let list = device.json_ok(&["agent", "list"]);
+    let rows = list["harnesses"].as_array().unwrap();
+    assert_eq!(rows.len(), 7);
+    for id in ["cursor", "kiro", "devin"] {
+        let row = rows.iter().find(|row| row["id"] == id).unwrap();
+        assert!(row["native_cli"].is_null(), "{id} must be config-only");
+    }
+
+    let cases = [
+        ("cursor", ".cursor/mcp.json", ".cursor/skills/akey"),
+        ("kiro", ".kiro/settings/mcp.json", ".kiro/skills/akey"),
+        (
+            "devin",
+            ".config/devin/mcp_config.json",
+            ".config/devin/skills/akey",
+        ),
+    ];
+
+    for (id, config, skill) in cases {
+        let report = device.json_ok(&["agent", "install", id]);
+        assert_eq!(report["changed"], true, "{id}");
+        assert_eq!(report["harnesses"][0]["mcp"]["via"], "config", "{id}");
+
+        let config_path = device.home_path().join(config);
+        let text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(text.contains("\"command\": \"akey\""), "{id}: {text}");
+        assert!(text.contains("\"args\""), "{id}: {text}");
+        assert!(!text.contains("\"type\""), "{id}: {text}");
+        assert!(!text.contains("\"disabled\""), "{id}: {text}");
+        assert!(device.home_path().join(skill).join("SKILL.md").is_file());
+
+        let status = device.json_ok(&["agent", "status", id]);
+        assert_eq!(status["ready"], true, "{id}");
+        assert_eq!(status["harnesses"][0]["native"]["found"], false, "{id}");
+        assert!(
+            status["harnesses"][0]["native"]["command"].is_null(),
+            "{id} must not name a native command"
+        );
+
+        let removed = device.json_ok(&["agent", "uninstall", id]);
+        assert_eq!(removed["removed"], 3, "{id}");
+        assert!(config_path.is_file(), "{id} must keep the config file");
+        assert!(!device.home_path().join(skill).exists(), "{id}");
+    }
+}
+
 /// Uninstall is the mirror of install: it edits config files but never deletes them, and a
 /// second run is a no-op rather than an error.
 #[test]

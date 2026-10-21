@@ -42,6 +42,7 @@ struct EntryView {
     kind: Option<String>,
     argv: Vec<String>,
     enabled: Option<bool>,
+    disabled: Option<bool>,
 }
 
 impl EntryView {
@@ -61,7 +62,7 @@ impl EntryView {
         }
 
         let expected_kind = match style {
-            McpStyle::Claude => Some("stdio"),
+            McpStyle::Claude | McpStyle::Plain => Some("stdio"),
             McpStyle::OpenCode => Some("local"),
             McpStyle::Codex | McpStyle::Hermes => None,
         };
@@ -74,6 +75,9 @@ impl EntryView {
 
         if matches!(style, McpStyle::Hermes | McpStyle::OpenCode) && self.enabled == Some(false) {
             problems.push("is disabled (`enabled: false`)".to_string());
+        }
+        if style == McpStyle::Plain && self.disabled == Some(true) {
+            problems.push("is disabled (`disabled: true`)".to_string());
         }
 
         problems
@@ -576,6 +580,7 @@ fn json_entry_view(value: &JsonValue) -> EntryView {
             .map(str::to_string),
         argv,
         enabled: object.get("enabled").and_then(JsonValue::as_bool),
+        disabled: object.get("disabled").and_then(JsonValue::as_bool),
     }
 }
 
@@ -590,6 +595,10 @@ fn desired_json(harness: &Harness) -> Result<JsonValue> {
             "type": "local",
             "command": ["akey", "mcp"],
             "enabled": true,
+        })),
+        McpStyle::Plain => Ok(json!({
+            "command": "akey",
+            "args": ["mcp"],
         })),
         style => Err(adapter_mismatch(harness, style)),
     }
@@ -695,6 +704,7 @@ fn toml_entry_view(item: &Item) -> EntryView {
         kind: table.get("type").and_then(Item::as_str).map(str::to_string),
         argv,
         enabled: table.get("enabled").and_then(Item::as_bool),
+        disabled: table.get("disabled").and_then(Item::as_bool),
     }
 }
 
@@ -797,6 +807,7 @@ fn yaml_entry_view(node: &YamlNode) -> EntryView {
 
     let kind = table.get("type");
     let enabled = table.get("enabled");
+    let disabled = table.get("disabled");
     EntryView {
         kind: kind
             .as_ref()
@@ -804,6 +815,10 @@ fn yaml_entry_view(node: &YamlNode) -> EntryView {
             .map(|scalar| scalar.as_string()),
         argv,
         enabled: enabled
+            .as_ref()
+            .and_then(|node| node.as_scalar())
+            .and_then(|scalar| scalar.as_bool()),
+        disabled: disabled
             .as_ref()
             .and_then(|node| node.as_scalar())
             .and_then(|scalar| scalar.as_bool()),
@@ -1097,6 +1112,78 @@ mod tests {
     }
 
     #[test]
+    fn plain_entries_have_no_type_and_reject_disabled() {
+        let configs = [
+            ("cursor", ".cursor/mcp.json"),
+            ("kiro", ".kiro/settings/mcp.json"),
+            ("devin", ".config/devin/mcp_config.json"),
+        ];
+
+        for (id, relative) in configs {
+            let temp = tempfile::tempdir().unwrap();
+            let home = temp.path();
+            let harness = harness(id);
+
+            let plan = install(harness, home, temp.path());
+            let text = String::from_utf8_lossy(&plan.contents);
+            assert!(text.contains("\"command\": \"akey\""), "{id}: {text}");
+            assert!(text.contains("\"args\""), "{id}: {text}");
+            assert!(!text.contains("\"type\""), "{id}: {text}");
+            assert!(
+                !text.contains("\"enabled\"") && !text.contains("\"disabled\""),
+                "{id}: {text}"
+            );
+
+            // The canonical plain shape is accepted with an explicit `stdio` type as well.
+            write_config(
+                &home.join(relative),
+                r#"{"mcpServers":{"akey":{"type":"stdio","command":"akey","args":["mcp"]}}}"#,
+            );
+            assert_eq!(
+                inspect(harness, Scope::User, home, temp.path())
+                    .unwrap()
+                    .status,
+                EntryStatus::Installed,
+                "{id}"
+            );
+
+            // A remote transport must not be mistaken for the stdio entry akey installs.
+            write_config(
+                &home.join(relative),
+                r#"{"mcpServers":{"akey":{"type":"sse","command":"akey","args":["mcp"]}}}"#,
+            );
+            assert!(matches!(
+                inspect(harness, Scope::User, home, temp.path())
+                    .unwrap()
+                    .status,
+                EntryStatus::Conflict { .. }
+            ));
+
+            // `disabled: true` means the entry exists but never runs.
+            write_config(
+                &home.join(relative),
+                r#"{"mcpServers":{"akey":{"command":"akey","args":["mcp"],"disabled":true}}}"#,
+            );
+            let err = plan_for(harness, home, temp.path(), false).unwrap_err();
+            assert!(matches!(err, Error::AgentConflict(_)), "{id}: {err:?}");
+            assert!(err.to_string().contains("disabled"), "{id}: {err}");
+
+            let forced = plan_for(harness, home, temp.path(), true).unwrap();
+            assert_eq!(forced.change, Change::Replaced, "{id}");
+            apply(&forced).unwrap();
+            let text = std::fs::read_to_string(home.join(relative)).unwrap();
+            assert!(!text.contains("disabled"), "{id}: {text}");
+            assert_eq!(
+                inspect(harness, Scope::User, home, temp.path())
+                    .unwrap()
+                    .status,
+                EntryStatus::Installed,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn malformed_config_is_reported_and_never_overwritten() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path();
@@ -1247,6 +1334,17 @@ mod tests {
         assert!(text.contains("$schema"), "{text}");
         assert!(text.contains("\"other\""), "{text}");
         assert!(!text.contains("\"akey\""), "{text}");
+
+        write_config(
+            &home.join(".cursor/mcp.json"),
+            r#"{"mcpServers":{"other":{"command":"other","args":[]}}}"#,
+        );
+        install(harness("cursor"), home, temp.path());
+        let plan = remove_for(harness("cursor"), home, temp.path(), false).unwrap();
+        apply_remove(&plan).unwrap();
+        let text = std::fs::read_to_string(home.join(".cursor/mcp.json")).unwrap();
+        assert!(text.contains("\"other\""), "{text}");
+        assert!(!text.contains("\"akey\""), "{text}");
     }
 
     #[test]
@@ -1281,6 +1379,21 @@ mod tests {
                 "opencode",
                 ".config/opencode/opencode.json",
                 r#"{"mcp":{"akey":{"type":"local","command":["other","mcp"]}}}"#,
+            ),
+            (
+                "cursor",
+                ".cursor/mcp.json",
+                r#"{"mcpServers":{"akey":{"command":"other","args":["mcp"]}}}"#,
+            ),
+            (
+                "kiro",
+                ".kiro/settings/mcp.json",
+                r#"{"mcpServers":{"akey":{"command":"other","args":["mcp"]}}}"#,
+            ),
+            (
+                "devin",
+                ".config/devin/mcp_config.json",
+                r#"{"mcpServers":{"akey":{"command":"other","args":["mcp"]}}}"#,
             ),
         ];
 

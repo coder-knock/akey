@@ -208,11 +208,65 @@ akey agent uninstall claude-code        # remove akey's entry + skill, keep the 
 akey agent print claude                 # exact snippet + skill, writes nothing
 ```
 
-Supported today: Claude Code (`claude-code`), Codex (`codex`), Hermes Agent (`hermes`), and
-OpenCode (`opencode`). `claude-code` and `opencode` also support `--scope project`, which writes
-into the current repository (`.mcp.json`, `.agents/skills/akey`, …) instead of the user's home
-directory. `--only mcp` or `--only skill` installs a single artifact; `--no-native` skips the
-harness CLI and edits config files directly.
+Supported today: seven harnesses. `akey agent list` is always the authoritative answer, because
+it reads the same registry the installer does:
+
+| Harness | id | Scopes | MCP config (user / project) | Skill root (user / project) | Native CLI |
+|---|---|---|---|---|---|
+| Claude Code | `claude-code` | user, project | `~/.claude.json` / `.mcp.json` | `~/.claude/skills` / `.claude/skills` | `claude` |
+| Codex | `codex` | user | `~/.codex/config.toml` / — | `~/.agents/skills` / — | `codex` |
+| Cursor | `cursor` | user, project | `~/.cursor/mcp.json` / `.cursor/mcp.json` | `~/.cursor/skills` / `.cursor/skills` | — |
+| Hermes Agent | `hermes` | user | `~/.hermes/config.yaml` / — | `~/.hermes/skills` / — | `hermes` |
+| OpenCode | `opencode` | user, project | `~/.config/opencode/opencode.json[c]` / `opencode.json[c]` or `.opencode/opencode.json` | `~/.agents/skills` / `.agents/skills` | `opencode` |
+| Kiro | `kiro` | user, project | `~/.kiro/settings/mcp.json` / `.kiro/settings/mcp.json` | `~/.kiro/skills` / `.kiro/skills` | — |
+| Devin | `devin` | user, project | `~/.config/devin/mcp_config.json` / `.devin/mcp_config.json` | `~/.config/devin/skills` / `.devin/skills` | — |
+
+`--scope project` writes into the current repository instead of your home directory.
+`--only mcp` or `--only skill` installs a single artifact; `--no-native` skips the harness CLI and
+edits config files directly.
+
+#### Harness notes
+
+##### Claude Code
+
+Registers through `claude mcp add` when available. The user entry lives in `~/.claude.json`;
+project scope writes `.mcp.json` next to `.claude/skills/akey`.
+
+##### Codex
+
+User scope only, in `~/.codex/config.toml` under `[mcp_servers.akey]`. Codex and OpenCode both read
+`~/.agents/skills/akey`, so the two share one skill document.
+
+##### Cursor
+
+Config-only: Cursor does not expose a CLI that akey can delegate to. The entry is the plain stdio
+shape `{"command": "akey", "args": ["mcp"]}` (no `type` field), written to `~/.cursor/mcp.json` or
+`.cursor/mcp.json`. Cursor also discovers `.agents/skills`, but akey installs into Cursor's native
+`.cursor/skills` root so removal is unambiguous.
+
+##### Hermes Agent
+
+User scope only. The YAML config at `~/.hermes/config.yaml` gets an `mcp_servers.akey` entry.
+`enabled: false` is a conflict: the entry exists but would never run.
+
+##### OpenCode
+
+Uses OpenCode's `mcp` map with the `local` command array. The user config may be
+`~/.config/opencode/opencode.json` or `.jsonc`; project scope reads `opencode.json`,
+`opencode.jsonc`, or `.opencode/opencode.json`. `enabled: false` is a conflict.
+
+##### Kiro
+
+Config-only. Writes `~/.kiro/settings/mcp.json` for user scope or `.kiro/settings/mcp.json` for
+project scope; the workspace file shadows the user file, which is why both scopes exist. Skills go
+to the matching `.kiro/skills` root. `disabled: true` is a conflict.
+
+##### Devin
+
+Config-only, for Devin CLI. User config is `~/.config/devin/mcp_config.json`, project config is
+`.devin/mcp_config.json`; Devin's own `.devin/mcp_config.local.json` is not managed. Skills live in
+`~/.config/devin/skills` or `.devin/skills`. On Windows the user config moves to
+`%APPDATA%\devin\mcp_config.json`; Windows support is not implemented yet.
 
 Every selected harness is planned before anything is written, so a corrupt config or a conflicting
 skill fails the whole run instead of leaving a half-installed set. Matching entries are left alone;

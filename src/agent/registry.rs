@@ -1,9 +1,9 @@
 //! The data-driven harness registry.
 //!
 //! A harness is **data**, not a trait object. Each row describes where the MCP entry and
-//! the skill live, how the entry is shaped, and which native CLI can write it. Adding a
-//! harness is therefore a registry row plus — for an unseen config shape — one adapter
-//! arm in [`super::config`], not a new implementation of the whole install pipeline.
+//! the skill live, how the entry is shaped, and which native CLI (if any) can write it.
+//! Adding a harness is therefore a registry row plus — for an unseen config shape — one
+//! adapter arm in [`super::config`], not a new implementation of the whole install pipeline.
 //!
 //! Keeping this table plain also makes `akey agent list` honest: it reports exactly what
 //! the binary knows how to do, with no hidden capability behind a dynamic loader.
@@ -82,14 +82,21 @@ impl ConfigFormat {
 
 /// How an MCP server entry is shaped inside a config.
 ///
-/// The style names the adapter, not the agent: Claude, Codex, Hermes and OpenCode each
-/// have a distinct entry grammar, and a future harness will usually reuse one of them.
+/// The style names the adapter, not the agent: Claude, Codex, Hermes, OpenCode and the
+/// plain `command`/`args` hosts each have a distinct entry grammar, and a future harness
+/// will usually reuse one of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpStyle {
     Claude,
     Codex,
     Hermes,
     OpenCode,
+    /// `{"command": "akey", "args": ["mcp"]}` with no `type` discriminator.
+    ///
+    /// Cursor, Kiro, and Devin all use the bare stdio shape that the wider MCP ecosystem
+    /// standardized on. Some of them also accept `disabled: true`, which is read as a
+    /// conflict because the entry would exist without ever running.
+    Plain,
 }
 
 /// One supported AI agent harness.
@@ -117,8 +124,11 @@ pub struct Harness {
     pub user_skills: Option<&'static str>,
     /// Skill root relative to the working directory.
     pub project_skills: Option<&'static str>,
-    /// Native CLI that can write the MCP entry.
-    pub native_cli: &'static str,
+    /// Native CLI that can write the MCP entry, when the harness ships one akey can drive.
+    ///
+    /// `None` means the harness is supported through structured config editing only; the
+    /// install pipeline then never looks for an executable.
+    pub native_cli: Option<&'static str>,
     /// Human note for `agent list`.
     pub note: &'static str,
     /// Section of the integration guide that documents this harness.
@@ -227,7 +237,7 @@ static HARNESSES: &[Harness] = &[
         schema_url: None,
         user_skills: Some(".claude/skills"),
         project_skills: Some(".claude/skills"),
-        native_cli: "claude",
+        native_cli: Some("claude"),
         note: "user and project MCP configs",
         docs: "docs/AGENT-INTEGRATION.md#claude-code",
     },
@@ -244,9 +254,26 @@ static HARNESSES: &[Harness] = &[
         schema_url: None,
         user_skills: Some(".agents/skills"),
         project_skills: None,
-        native_cli: "codex",
+        native_cli: Some("codex"),
         note: "global config only",
         docs: "docs/AGENT-INTEGRATION.md#codex",
+    },
+    Harness {
+        id: "cursor",
+        display: "Cursor",
+        aliases: &[],
+        scopes: &[Scope::User, Scope::Project],
+        user_config: &[".cursor/mcp.json"],
+        project_config: &[".cursor/mcp.json"],
+        format: ConfigFormat::Json,
+        style: McpStyle::Plain,
+        key: "mcpServers",
+        schema_url: None,
+        user_skills: Some(".cursor/skills"),
+        project_skills: Some(".cursor/skills"),
+        native_cli: None,
+        note: "user and project MCP configs",
+        docs: "docs/AGENT-INTEGRATION.md#cursor",
     },
     Harness {
         id: "hermes",
@@ -261,7 +288,7 @@ static HARNESSES: &[Harness] = &[
         schema_url: None,
         user_skills: Some(".hermes/skills"),
         project_skills: None,
-        native_cli: "hermes",
+        native_cli: Some("hermes"),
         note: "global config only",
         docs: "docs/AGENT-INTEGRATION.md#hermes-agent",
     },
@@ -282,9 +309,46 @@ static HARNESSES: &[Harness] = &[
         schema_url: Some("https://opencode.ai/config.json"),
         user_skills: Some(".agents/skills"),
         project_skills: Some(".agents/skills"),
-        native_cli: "opencode",
+        native_cli: Some("opencode"),
         note: "user and project MCP configs",
         docs: "docs/AGENT-INTEGRATION.md#opencode",
+    },
+    Harness {
+        id: "kiro",
+        display: "Kiro",
+        aliases: &[],
+        scopes: &[Scope::User, Scope::Project],
+        // Workspace config shadows the user file; both use the same nested settings path.
+        user_config: &[".kiro/settings/mcp.json"],
+        project_config: &[".kiro/settings/mcp.json"],
+        format: ConfigFormat::Json,
+        style: McpStyle::Plain,
+        key: "mcpServers",
+        schema_url: None,
+        user_skills: Some(".kiro/skills"),
+        project_skills: Some(".kiro/skills"),
+        native_cli: None,
+        note: "user and project MCP configs",
+        docs: "docs/AGENT-INTEGRATION.md#kiro",
+    },
+    Harness {
+        id: "devin",
+        display: "Devin",
+        aliases: &["devin-cli"],
+        scopes: &[Scope::User, Scope::Project],
+        // Devin CLI reads its user config from the XDG-style config directory. Windows
+        // uses `%APPDATA%\devin` instead and is not covered by the current path model.
+        user_config: &[".config/devin/mcp_config.json"],
+        project_config: &[".devin/mcp_config.json"],
+        format: ConfigFormat::Json,
+        style: McpStyle::Plain,
+        key: "mcpServers",
+        schema_url: None,
+        user_skills: Some(".config/devin/skills"),
+        project_skills: Some(".devin/skills"),
+        native_cli: None,
+        note: "user and project MCP configs",
+        docs: "docs/AGENT-INTEGRATION.md#devin",
     },
 ];
 
@@ -402,7 +466,28 @@ mod tests {
         assert_eq!(resolve("hermes_agent").unwrap().id, "hermes");
         assert_eq!(resolve("codex").unwrap().id, "codex");
         assert_eq!(resolve("opencode").unwrap().id, "opencode");
+        assert_eq!(resolve("cursor").unwrap().id, "cursor");
+        assert_eq!(resolve("kiro").unwrap().id, "kiro");
+        assert_eq!(resolve("devin-cli").unwrap().id, "devin");
         assert!(resolve("nope").is_none());
+    }
+
+    #[test]
+    fn config_only_harnesses_have_no_native_writer() {
+        for harness in harnesses() {
+            for scope in harness.scopes {
+                assert_eq!(
+                    harness.native_cli.is_some(),
+                    harness.native_args(*scope).is_some(),
+                    "{} advertises a native CLI and a native writer inconsistently",
+                    harness.id
+                );
+            }
+        }
+        for id in ["cursor", "kiro", "devin"] {
+            let harness = resolve(id).unwrap();
+            assert!(harness.native_cli.is_none(), "{id}");
+        }
     }
 
     #[test]
@@ -422,6 +507,36 @@ mod tests {
         let codex = resolve("codex").unwrap();
         assert!(codex.config_path(Scope::Project, home, cwd).is_none());
         assert!(codex.skill_dir(Scope::Project, home, cwd).is_none());
+
+        let cursor = resolve("cursor").unwrap();
+        assert_eq!(
+            cursor.config_path(Scope::User, home, cwd).unwrap(),
+            PathBuf::from("/home/agent/.cursor/mcp.json")
+        );
+        assert_eq!(
+            cursor.config_path(Scope::Project, home, cwd).unwrap(),
+            PathBuf::from("/work/project/.cursor/mcp.json")
+        );
+
+        let kiro = resolve("kiro").unwrap();
+        assert_eq!(
+            kiro.config_path(Scope::User, home, cwd).unwrap(),
+            PathBuf::from("/home/agent/.kiro/settings/mcp.json")
+        );
+        assert_eq!(
+            kiro.config_path(Scope::Project, home, cwd).unwrap(),
+            PathBuf::from("/work/project/.kiro/settings/mcp.json")
+        );
+
+        let devin = resolve("devin").unwrap();
+        assert_eq!(
+            devin.config_path(Scope::User, home, cwd).unwrap(),
+            PathBuf::from("/home/agent/.config/devin/mcp_config.json")
+        );
+        assert_eq!(
+            devin.config_path(Scope::Project, home, cwd).unwrap(),
+            PathBuf::from("/work/project/.devin/mcp_config.json")
+        );
     }
 
     #[test]
@@ -494,6 +609,34 @@ mod tests {
                 .skill_dir(Scope::Project, home, cwd)
                 .unwrap(),
             PathBuf::from("/work/project/.agents/skills/akey")
+        );
+        assert_eq!(
+            resolve("cursor")
+                .unwrap()
+                .skill_dir(Scope::User, home, cwd)
+                .unwrap(),
+            PathBuf::from("/home/agent/.cursor/skills/akey")
+        );
+        assert_eq!(
+            resolve("kiro")
+                .unwrap()
+                .skill_dir(Scope::Project, home, cwd)
+                .unwrap(),
+            PathBuf::from("/work/project/.kiro/skills/akey")
+        );
+        assert_eq!(
+            resolve("devin")
+                .unwrap()
+                .skill_dir(Scope::User, home, cwd)
+                .unwrap(),
+            PathBuf::from("/home/agent/.config/devin/skills/akey")
+        );
+        assert_eq!(
+            resolve("devin")
+                .unwrap()
+                .skill_dir(Scope::Project, home, cwd)
+                .unwrap(),
+            PathBuf::from("/work/project/.devin/skills/akey")
         );
     }
 }

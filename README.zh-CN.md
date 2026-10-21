@@ -110,11 +110,16 @@ akey agent print claude                # 打印准确内容，不写任何文件
 |---|---|---|
 | Claude Code | `claude-code` | user、project |
 | Codex | `codex` | user |
+| Cursor | `cursor` | user、project |
 | Hermes Agent | `hermes` | user |
 | OpenCode | `opencode` | user、project |
+| Kiro | `kiro` | user、project |
+| Devin | `devin` | user、project |
 
 安装器优先调用各 harness 自己的 CLI（`claude mcp add`、`codex mcp add`、`hermes mcp add`、
-`opencode mcp add`），CLI 未安装时直接改配置文件。若 CLI 存在但执行失败，安装会中止并提示改用
+`opencode mcp add`），CLI 未安装时直接改配置文件。Cursor、Kiro、Devin 没有可集成的 CLI，始终走
+结构化配置，使用这些宿主文档中的纯 stdio 条目
+`{"command": "akey", "args": ["mcp"]}`。若原生 CLI 存在但执行失败，安装会中止并提示改用
 `--no-native`，而不是在一个可能写了一半的配置上继续猜。`--scope project` 写进当前仓库而不是
 主目录，仅对支持该作用域的 harness 生效。重复执行是幂等的——已存在的冲突条目或被手工改过的
 skill 需要 `--force`。`uninstall` 是同样克制的反向操作：只删 akey 自己的条目与 skill，绝不删
@@ -219,7 +224,7 @@ akey --lang zh-CN list     # 显式指定；也可用 AKEY_LANG=zh-CN，或 $LC_
 
 ## 状态
 
-**当前可用。** CLI 完整：**295 单元 + 59 契约 + 11 端到端测试**，GUI 另有 **118 个逻辑测试**；
+**当前可用。** CLI 完整：**297 单元 + 60 契约 + 11 端到端测试**，GUI 另有 **118 个逻辑测试**；
 `cargo clippy` 零警告，release 静态二进制约 4 MB，1000 条目金库的最差读取 54 ms（预算 100 ms）。
 
 **平台支持。** macOS 与 Linux 有端到端覆盖。Windows 能编译、单元测试通过，发布流程也为它产出

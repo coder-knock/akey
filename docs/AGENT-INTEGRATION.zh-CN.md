@@ -190,10 +190,62 @@ akey agent uninstall claude-code        # 移除 akey 的条目与 skill，配�
 akey agent print claude                 # 打印准确内容，不写任何文件
 ```
 
-目前支持：Claude Code（`claude-code`）、Codex（`codex`）、Hermes Agent（`hermes`）、
-OpenCode（`opencode`）。其中 `claude-code` 与 `opencode` 还支持 `--scope project`，
-写进当前仓库（`.mcp.json`、`.agents/skills/akey` 等）而不是用户主目录。`--only mcp` /
-`--only skill` 只装其中一件；`--no-native` 跳过 harness CLI，直接改配置文件。
+目前支持七个 harness。`akey agent list` 永远是最准确的答案，因为它读的就是安装器使用的同一张注册表：
+
+| Harness | id | 作用域 | MCP 配置（user / project） | Skill 根（user / project） | 原生 CLI |
+|---|---|---|---|---|---|
+| Claude Code | `claude-code` | user、project | `~/.claude.json` / `.mcp.json` | `~/.claude/skills` / `.claude/skills` | `claude` |
+| Codex | `codex` | user | `~/.codex/config.toml` / — | `~/.agents/skills` / — | `codex` |
+| Cursor | `cursor` | user、project | `~/.cursor/mcp.json` / `.cursor/mcp.json` | `~/.cursor/skills` / `.cursor/skills` | — |
+| Hermes Agent | `hermes` | user | `~/.hermes/config.yaml` / — | `~/.hermes/skills` / — | `hermes` |
+| OpenCode | `opencode` | user、project | `~/.config/opencode/opencode.json[c]` / `opencode.json[c]` 或 `.opencode/opencode.json` | `~/.agents/skills` / `.agents/skills` | `opencode` |
+| Kiro | `kiro` | user、project | `~/.kiro/settings/mcp.json` / `.kiro/settings/mcp.json` | `~/.kiro/skills` / `.kiro/skills` | — |
+| Devin | `devin` | user、project | `~/.config/devin/mcp_config.json` / `.devin/mcp_config.json` | `~/.config/devin/skills` / `.devin/skills` | — |
+
+`--scope project` 写进当前仓库而不是用户主目录。`--only mcp` / `--only skill` 只装其中一件；
+`--no-native` 跳过 harness CLI，直接改配置文件。
+
+#### 各 harness 说明
+
+##### Claude Code
+
+有原生 CLI 时通过 `claude mcp add` 注册。用户条目在 `~/.claude.json`；project 作用域写入
+`.mcp.json`，skill 落在 `.claude/skills/akey`。
+
+##### Codex
+
+只有 user 作用域，配置在 `~/.codex/config.toml` 的 `[mcp_servers.akey]`。Codex 与 OpenCode
+都读 `~/.agents/skills/akey`，因此共用同一份 skill 文档。
+
+##### Cursor
+
+仅结构化配置：Cursor 没有 akey 可委托的 CLI。条目使用不带 `type` 的纯 stdio 形状
+`{"command": "akey", "args": ["mcp"]}`，写入 `~/.cursor/mcp.json` 或 `.cursor/mcp.json`。
+Cursor 也会发现 `.agents/skills`，但 akey 装进它自己的 `.cursor/skills` 根，卸载边界更清楚。
+
+##### Hermes Agent
+
+只有 user 作用域。`~/.hermes/config.yaml` 中写入 `mcp_servers.akey`。`enabled: false` 算冲突：
+条目存在，但永远不会运行。
+
+##### OpenCode
+
+使用 OpenCode 的 `mcp` 映射与 `local` 命令数组。用户配置可能是
+`~/.config/opencode/opencode.json` 或 `.jsonc`；project 作用域读取 `opencode.json`、
+`opencode.jsonc` 或 `.opencode/opencode.json`。`enabled: false` 算冲突。
+
+##### Kiro
+
+仅结构化配置。user 作用域写 `~/.kiro/settings/mcp.json`，project 作用域写
+`.kiro/settings/mcp.json`；工作区文件会覆盖用户文件，所以两个作用域都存在。skill 写入对应的
+`.kiro/skills` 根。`disabled: true` 算冲突。
+
+##### Devin
+
+仅结构化配置，面向 Devin CLI。用户配置为 `~/.config/devin/mcp_config.json`，项目配置为
+`.devin/mcp_config.json`；Devin 自己的 `.devin/mcp_config.local.json` 不由 akey 管理。skill 位于
+`~/.config/devin/skills` 或 `.devin/skills`。Windows 上用户配置改为
+`%APPDATA%\devin\mcp_config.json`，Windows 支持尚未实现。
 
 所有选中的 harness 会先全部规划、再开始写，因此某个配置损坏或 skill 冲突会让整次安装失败，
 而不会留下装了一半的状态。已匹配的条目原样保留；`akey` 条目内容不同、或 skill 被本地改过，

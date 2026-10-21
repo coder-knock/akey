@@ -114,15 +114,20 @@ akey agent print claude                # exact bytes, writes nothing
 |---|---|---|
 | Claude Code | `claude-code` | user, project |
 | Codex | `codex` | user |
+| Cursor | `cursor` | user, project |
 | Hermes Agent | `hermes` | user |
 | OpenCode | `opencode` | user, project |
+| Kiro | `kiro` | user, project |
+| Devin | `devin` | user, project |
 
 The installer prefers each harness's own CLI (`claude mcp add`, `codex mcp add`, `hermes mcp add`,
-`opencode mcp add`) and edits the config file directly when that CLI is not installed. If the CLI
-is present but fails, the install aborts and points at `--no-native` rather than guessing at a
-half-written config. `--scope project` writes into the current repository instead of your home
-directory, for harnesses that support it. Re-running is idempotent — a conflicting entry or a
-hand-edited skill needs `--force`. `uninstall` is the inverse and just as narrow: it removes only
+`opencode mcp add`) and edits the config file directly when that CLI is not installed. Cursor, Kiro,
+and Devin have no CLI integration and are always configured structurally, using the plain
+`{"command": "akey", "args": ["mcp"]}` entry those hosts document. If a native CLI is present but
+fails, the install aborts and points at `--no-native` rather than guessing at a half-written config.
+`--scope project` writes into the current repository instead of your home directory, for harnesses
+that support it. Re-running is idempotent — a conflicting entry or a hand-edited skill needs
+`--force`. `uninstall` is the inverse and just as narrow: it removes only
 akey's entry and skill, never the config file, and treats an already-missing entry as a no-op.
 Codex and OpenCode share `~/.agents/skills/akey`, so removing it for one affects both; the report
 says so. Because harnesses launch `akey mcp`, the `akey` binary must stay on `PATH`.
@@ -233,7 +238,7 @@ PNG or SVG export. Regeneration commands: [docs/diagrams/README.md](docs/diagram
 
 ## Status
 
-**Available now.** The CLI is complete: **295 unit + 59 contract + 11 end-to-end tests**, and the
+**Available now.** The CLI is complete: **297 unit + 60 contract + 11 end-to-end tests**, and the
 GUI carries another **118 logic tests**; `cargo clippy` clean, a ~4 MB static release binary, and a
 worst-case vault read of 54 ms on a 1000-entry vault against a 100 ms budget.
 

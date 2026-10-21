@@ -647,13 +647,13 @@ gui/
 
 | 层 | 文件 | 职责 | 不知道什么 |
 |---|---|---|---|
-| 注册表 | `registry.rs` | harness 的 id / 别名 / 作用域 / 配置候选路径 / 格式 / 入口语法 / skill 根 / 原生 CLI | 不知道文件内容如何解析 |
+| 注册表 | `registry.rs` | harness 的 id / 别名 / 作用域 / 配置候选路径 / 格式 / 入口语法 / skill 根 / 可选的原生 CLI | 不知道文件内容如何解析 |
 | 适配器 | `config.rs` | 按格式读取、匹配、规划、结构化写入 JSON/JSONC/TOML/YAML | 不知道 harness 叫什么 |
 | 编排 | `mod.rs` | 选择、原生委派、计划-应用、安装与卸载报告 | 不知道某个具体 agent 的路径 |
 
-`Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`，移除永远经过 `config::plan_remove` / `config::apply_remove`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可，不写也能退化为结构化编辑。
+`Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`，移除永远经过 `config::plan_remove` / `config::apply_remove`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可。`native_cli` 是 `Option`：Cursor、Kiro、Devin 没有 akey 可委托的 CLI，注册表直接写 `None`，安装器不会去找可执行文件，也不会假装存在原生路径。
 
-`McpStyle` 以**语法**命名（`Claude` / `Codex` / `Hermes` / `OpenCode`），不以 agent 命名：新 harness 往往复用已有语法，而同一个 agent 也可能在不同作用域用不同文件。
+`McpStyle` 以**语法**命名（`Claude` / `Codex` / `Hermes` / `OpenCode` / `Plain`），不以 agent 命名：新 harness 往往复用已有语法，而同一个 agent 也可能在不同作用域用不同文件。`Plain` 是 MCP 生态最常见的裸 stdio 形状 `{"command": "akey", "args": ["mcp"]}`，不带 `type` 判别字段；Cursor、Kiro、Devin 都用它。
 
 ### 19.2 两个可安装物
 
@@ -672,9 +672,9 @@ skill 目录旁的 `.akey-managed` 记录 `tool`、`version`、`sha256`、`insta
 
 harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个条目」的语义，也不保证保留注释。规则因此是：
 
-- `Change::Added` 且找到了原生 CLI → 调用它；调用后**重新读取配置**，确认条目真的可用，否则报 `harness` 错误并提示 `--no-native`。
+- `Change::Added` 且该 harness 声明了 `native_cli`、并在 `PATH` 上找到了它 → 调用它；调用后**重新读取配置**，确认条目真的可用，否则报 `harness` 错误并提示 `--no-native`。
 - `Change::Replaced`（`--force`）→ 永远走结构化编辑。原生 CLI 可能追加第二个同名条目，而不是替换。
-- 原生 CLI 不存在，或传了 `--no-native` → 结构化编辑。
+- `native_cli` 为 `None`、原生 CLI 不存在，或传了 `--no-native` → 结构化编辑。
 - 原生 CLI 存在但执行失败 → 直接报 `harness` 错误，**不自动回退**。CLI 可能已经写了一半配置；此时再盲目改文件会把两份修改叠在一起。错误信息给出 `--no-native`，由人决定是清理还是重试。
 
 子进程的 stdout/stderr 一律捕获，stdin 设为 null：harness CLI 的输出不能污染 `akey --json` 的 stdout。
@@ -684,14 +684,15 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 `akey` 条目的 `env`、以及用户添加的任意额外键，都不参与匹配——它们不影响 `akey mcp` 的行为，也不该让「已经装好了」变成冲突。比较的是：
 
 - `command` + `args` 必须等价于 `akey mcp`；
-- `type`（若存在）必须是该 harness 认识的 stdio 变体；
-- Hermes / OpenCode 的 `enabled: false` 视为冲突，因为条目存在但不会运行（Claude Code 与 Codex 没有这个字段）。
+- `type`（若存在）必须是该 harness 认识的 stdio 变体；`Plain` 接受缺省 `type`，也接受显式 `stdio`，但其他传输类型算冲突；
+- Hermes / OpenCode 的 `enabled: false` 视为冲突，因为条目存在但不会运行（Claude Code 与 Codex 没有这个字段）；
+- Cursor / Kiro / Devin 的 `disabled: true` 同样视为冲突，`--force` 会把它替换成可运行的条目。
 
 `--force` 只替换这些拥有的键，保留 `env` 与其他键。JSON 用 `jsonc-parser` 做 CST 编辑，因此注释和尾随逗号不会丢；TOML 用 `toml_edit`，YAML 用 `yaml-edit`，理由相同。
 
 ### 19.6 作用域与选择
 
-`user` 写用户主目录，`project` 写当前工作目录（可提交进仓库）。Codex 与 Hermes 只有 user；Claude Code 与 OpenCode 两者都有。
+`user` 写用户主目录，`project` 写当前工作目录（可提交进仓库）。Codex 与 Hermes 只有 user；Claude Code、Cursor、OpenCode、Kiro、Devin 两者都有。Kiro 的 workspace 配置会覆盖 user 配置，Devin 的 `.devin/mcp_config.local.json` 则不在 akey 的管理范围内。
 
 `AKEY_AGENT_HOME` 可覆盖主目录，`HOME` / `USERPROFILE` 是默认值。它**不是** `AKEY_HOME`：后者是 akey 自己的私有目录（`~/.config/akey`），而 harness 配置在真实主目录里。
 
@@ -712,7 +713,7 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 
 ### 19.8 新增一个 harness
 
-1. 在 `registry.rs` 的 `HARNESSES` 加一行：id、别名、作用域、配置候选、格式、语法、入口 key、skill 根、原生 CLI、文档链接；有原生 CLI 时再在 `native_args` 补一条 `mcp add` 语法。
+1. 在 `registry.rs` 的 `HARNESSES` 加一行：id、别名、作用域、配置候选、格式、语法、入口 key、skill 根、`native_cli`、文档链接；有原生 CLI 时再在 `native_args` 补一条 `mcp add` 语法，没有就写 `None`，安装会直接走结构化编辑。
 2. 配置格式是新的 → 在 `ConfigFormat` 加变体，并在 `config.rs` 补 inspect / draft 两条分支。
 3. 入口语法是新的 → 在 `McpStyle` 加变体，同样补两条分支。
 4. 在 `docs/AGENT-INTEGRATION.md` 加对应小节，并加一个使用临时 home 的测试。
