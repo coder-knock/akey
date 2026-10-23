@@ -120,20 +120,22 @@ akey agent print claude                # exact bytes, writes nothing
 | Kiro | `kiro` | user, project |
 | Devin | `devin` | user, project |
 
-The installer prefers each harness's own CLI (`claude mcp add`, `codex mcp add`, `hermes mcp add`,
-`opencode mcp add`) and edits the config file directly when that CLI is not installed. Cursor, Kiro,
-and Devin have no CLI integration and are always configured structurally, using the plain
-`{"command": "akey", "args": ["mcp"]}` entry those hosts document. If a native CLI is present but
-fails, the install aborts and points at `--no-native` rather than guessing at a half-written config.
-`--scope project` writes into the current repository instead of your home directory, for harnesses
-that support it. Re-running is idempotent — a conflicting entry or a hand-edited skill needs
-`--force`. `uninstall` is the inverse and just as narrow: it removes only
-akey's entry and skill, never the config file, and treats an already-missing entry as a no-op.
-Codex and OpenCode share `~/.agents/skills/akey`, so removing it for one affects both; the report
-says so. Because harnesses launch `akey mcp`, the `akey` binary must stay on `PATH`.
+`akey agent install` writes two artifacts per harness: an MCP registration and an embedded
+`SKILL.md` that teaches the agent how to use the vault. For an **added** entry the installer prefers
+the harness's own CLI (`claude mcp add`, `codex mcp add`, `hermes mcp add`, `opencode mcp add`);
+without one — or when replacing an entry, or with `--no-native` — it edits the config structurally.
+Cursor, Kiro, and Devin are config-only. Every run is fully planned before the first write, so a
+corrupt config or a hand-edited skill aborts the whole install; each writer is idempotent, so a
+rerun is safe. A conflicting `akey` entry or a modified skill needs `--force`.
+
+`--scope project` writes into the current repository for harnesses that support it. `uninstall`
+removes only akey's entry and skill, never the config file, and treats an already-missing entry as
+a no-op. Codex and OpenCode share `~/.agents/skills/akey`, so removing it for one affects both; the
+report names the other. Because harnesses launch `akey mcp`, the binary must stay on `PATH`.
 
 MCP is metadata-only: it tells an agent what exists and never returns a value. Agents still use
-`akey run` to hand a secret to the child process that needs it.
+`akey run` to hand a secret to the child process that needs it. Per-harness paths and deltas:
+[docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md) §6.1.
 
 ## Command index
 
@@ -248,8 +250,9 @@ pass, and the release workflow ships binaries for it — but the end-to-end suit
 coverage rather than a proven end-to-end path. Per-file ACLs are likewise not set; the code instead
 requires the vault home to live inside the user profile.
 
-**Roadmap.** Porting the Windows harness and hardening the experimental desktop GUI are next.
-`akey mcp` already lets an agent mount the vault directly — metadata only, never values.
+**Roadmap.** Windows end-to-end coverage and hardening the experimental desktop GUI are the
+immediate gaps. `?ssh-format=openssh` and multi-vault `--vault` remain explicit non-goals for this
+release; harness support grows by registry row, not by a new installer.
 
 ## License
 

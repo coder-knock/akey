@@ -116,19 +116,21 @@ akey agent print claude                # 打印准确内容，不写任何文件
 | Kiro | `kiro` | user、project |
 | Devin | `devin` | user、project |
 
-安装器优先调用各 harness 自己的 CLI（`claude mcp add`、`codex mcp add`、`hermes mcp add`、
-`opencode mcp add`），CLI 未安装时直接改配置文件。Cursor、Kiro、Devin 没有可集成的 CLI，始终走
-结构化配置，使用这些宿主文档中的纯 stdio 条目
-`{"command": "akey", "args": ["mcp"]}`。若原生 CLI 存在但执行失败，安装会中止并提示改用
-`--no-native`，而不是在一个可能写了一半的配置上继续猜。`--scope project` 写进当前仓库而不是
-主目录，仅对支持该作用域的 harness 生效。重复执行是幂等的——已存在的冲突条目或被手工改过的
-skill 需要 `--force`。`uninstall` 是同样克制的反向操作：只删 akey 自己的条目与 skill，绝不删
-配置文件；条目本就不存在时视为 no-op。Codex 与 OpenCode 共用 `~/.agents/skills/akey`，为其中
-一个卸载会同时影响另一个，报告会明确提示。因为 harness 启动的是 `akey mcp`，`akey` 二进制
-必须留在 `PATH` 上。
+`akey agent install` 为每个 harness 写两件东西：一条 MCP 注册，以及一份内嵌的 `SKILL.md`，
+教 agent 怎么用金库。新增条目时优先调用 harness 自己的 CLI（`claude mcp add`、`codex mcp add`、
+`hermes mcp add`、`opencode mcp add`）；没有 CLI、需要替换条目或传了 `--no-native` 时，直接
+结构化编辑配置。Cursor、Kiro、Devin 只有配置路径。每次安装都先完成全部规划再写第一个字节，
+所以某个配置损坏或 skill 被手工改过会让整次安装中止；每个写入器都是幂等的，重跑安全。已有但
+内容不同的 `akey` 条目、或被改过的 skill，需要 `--force`。
 
-MCP 只提供元数据：它告诉 agent 有什么，永不返回值。真正使用密钥仍然走 `akey run`，
-把值交给需要它的子进程。
+`--scope project` 在支持的 harness 上写入当前仓库。`uninstall` 只删 akey 的条目与 skill，
+绝不删除配置文件；条目本就不存在时是 no-op。Codex 与 OpenCode 共用 `~/.agents/skills/akey`，
+为其中一个卸载会影响两者，报告会点名另一个。因为 harness 启动的是 `akey mcp`，二进制必须留在
+`PATH` 上。
+
+MCP 只提供元数据：告诉 agent 有什么，永不返回值。真正使用密钥仍然走 `akey run`，把值交给需要
+它的子进程。每个 harness 的路径与差异见
+[docs/AGENT-INTEGRATION.zh-CN.md](docs/AGENT-INTEGRATION.zh-CN.md) §6.1。
 
 ## 命令一览
 
@@ -232,8 +234,9 @@ akey --lang zh-CN list     # 显式指定；也可用 AKEY_LANG=zh-CN，或 $LC_
 所以 Windows 手上是「编译级 + 单元级」的覆盖，而不是一条被验证过的端到端路径。同样地，Windows 上
 没有设置逐文件 ACL，代码改为要求金库目录必须位于用户 profile 之内。
 
-**路线图。** 下一步是移植 Windows 测试夹具，并继续完善实验性桌面 GUI。
-`akey mcp` 已经可以让 agent 直接挂载金库——只暴露元数据，永不返回值。
+**路线图。** 近期的已知缺口是 Windows 端到端覆盖与实验性桌面 GUI 加固。
+`?ssh-format=openssh` 与多金库 `--vault` 仍是本期的明确非目标；harness 支持靠注册表增长，
+不需要新增一套安装器。
 
 ## 许可
 

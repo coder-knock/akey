@@ -225,60 +225,36 @@ it reads the same registry the installer does:
 `--only mcp` or `--only skill` installs a single artifact; `--no-native` skips the harness CLI and
 edits config files directly.
 
-#### Harness notes
+#### Deltas worth knowing
 
-##### Claude Code
+The table above is the full path matrix. These are the behaviours that are easy to get wrong:
 
-Registers through `claude mcp add` when available. The user entry lives in `~/.claude.json`;
-project scope writes `.mcp.json` next to `.claude/skills/akey`.
+- **Claude Code** registers with `claude mcp add`; project scope writes `.mcp.json` beside
+  `.claude/skills/akey`.
+- **Codex** is user-only (`~/.codex/config.toml`, `[mcp_servers.akey]`). It shares
+  `~/.agents/skills/akey` with OpenCode.
+- **Cursor** is config-only and takes the plain stdio shape with no `type`. It discovers
+  `.agents/skills`, but akey installs into `.cursor/skills` so removal stays unambiguous.
+- **Hermes Agent** is user-only. Its YAML entry lives under `mcp_servers`; `enabled: false` is a
+  conflict because the entry would never run.
+- **OpenCode** uses the `mcp` map and `local` command array. Its user config may be `.json` or
+  `.jsonc`; project scope also accepts `.opencode/opencode.json`. `enabled: false` is a conflict.
+- **Kiro** is config-only. The workspace file shadows the user file; `disabled: true` is a conflict.
+- **Devin** is config-only for Devin CLI. `.devin/mcp_config.local.json` is deliberately unmanaged;
+  the Windows `%APPDATA%` path is not implemented yet.
 
-##### Codex
-
-User scope only, in `~/.codex/config.toml` under `[mcp_servers.akey]`. Codex and OpenCode both read
-`~/.agents/skills/akey`, so the two share one skill document.
-
-##### Cursor
-
-Config-only: Cursor does not expose a CLI that akey can delegate to. The entry is the plain stdio
-shape `{"command": "akey", "args": ["mcp"]}` (no `type` field), written to `~/.cursor/mcp.json` or
-`.cursor/mcp.json`. Cursor also discovers `.agents/skills`, but akey installs into Cursor's native
-`.cursor/skills` root so removal is unambiguous.
-
-##### Hermes Agent
-
-User scope only. The YAML config at `~/.hermes/config.yaml` gets an `mcp_servers.akey` entry.
-`enabled: false` is a conflict: the entry exists but would never run.
-
-##### OpenCode
-
-Uses OpenCode's `mcp` map with the `local` command array. The user config may be
-`~/.config/opencode/opencode.json` or `.jsonc`; project scope reads `opencode.json`,
-`opencode.jsonc`, or `.opencode/opencode.json`. `enabled: false` is a conflict.
-
-##### Kiro
-
-Config-only. Writes `~/.kiro/settings/mcp.json` for user scope or `.kiro/settings/mcp.json` for
-project scope; the workspace file shadows the user file, which is why both scopes exist. Skills go
-to the matching `.kiro/skills` root. `disabled: true` is a conflict.
-
-##### Devin
-
-Config-only, for Devin CLI. User config is `~/.config/devin/mcp_config.json`, project config is
-`.devin/mcp_config.json`; Devin's own `.devin/mcp_config.local.json` is not managed. Skills live in
-`~/.config/devin/skills` or `.devin/skills`. On Windows the user config moves to
-`%APPDATA%\devin\mcp_config.json`; Windows support is not implemented yet.
+#### Shared rules
 
 Every selected harness is planned before anything is written, so a corrupt config or a conflicting
 skill fails the whole run instead of leaving a half-installed set. Matching entries are left alone;
 a differing `akey` entry or a locally modified skill is a conflict, resolved with `--force`. JSON,
 JSONC, TOML, and YAML files are edited structurally, so comments and unrelated keys survive.
 
-`akey agent uninstall` reverses the operation with the same planning rules. It removes only the
-`akey` registration and the skill akey installed — the config file itself is never deleted, and an
-entry that is already gone is a no-op. A differing entry or a skill you edited needs `--force`.
-Codex and OpenCode share `~/.agents/skills/akey`, so removing it for one also removes it for the
-other; the report names the affected harness, and `akey agent install <harness> --only skill` puts
-the document back for one of them.
+`akey agent uninstall` mirrors those rules. It removes only the `akey` registration and the skill
+akey installed — the config file itself is never deleted, and an already-missing entry is a no-op.
+A differing entry or a skill you edited needs `--force`. Codex and OpenCode share the skill
+document: removing it for one affects both, and the report names the other. Reinstall it for one
+with `akey agent install <harness> --only skill`.
 
 The registration launches `akey mcp`, so `akey` must be on the harness's `PATH`.
 

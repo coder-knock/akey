@@ -55,7 +55,16 @@ src/reference.rs         akey:// parsing and resolution
 src/inject/mask.rs       streaming redaction of child process output
 src/inject/run.rs        env assembly + subprocess execution
 src/cmd/                 one file per command group; `cli.rs` is the source of truth
-src/agent/               harness registry, config adapters, skill install/removal
+src/agent/registry.rs    harness table: scopes / config candidates / skill roots / native CLI
+src/agent/config.rs      JSON/JSONC/TOML/YAML adapters; inspect / plan / apply
+src/agent/skill.rs       embedded SKILL.md + sidecar ownership
+src/agent/selection.rs   explicit vs default harness selection
+src/agent/native.rs      native CLI lookup / invocation / failure diagnostics
+src/agent/install.rs     install lifecycle + report
+src/agent/uninstall.rs   uninstall lifecycle + report
+src/agent/inspect.rs     list / status / print
+src/agent/mod.rs         public surface + display_path
+src/agent/tests.rs       harness tests
 assets/AGENTS.vault.md   shipped into every vault repo at `akey init`
 assets/brand/            logo, lockups, icons, README banner — read its README before
                          recolouring or redrawing the mark
@@ -72,7 +81,7 @@ assets/brand/            logo, lockups, icons, README banner — read its README
 - **Token hashing is SHA-256, not a KDF.** Tokens are 256-bit random; a slow KDF buys nothing
   and costs tens of milliseconds on every `akey run`.
 - **`git` is a subprocess.** It reuses the user's SSH keys and credential helpers; `GIT_TERMINAL_PROMPT=0`
-  and `LC_ALL=C` are set because we both non-interactively and match on its stderr text.
+  and `LC_ALL=C` are set because we run non-interactively and match on its stderr text.
 - **Masking holds the tail.** A secret can straddle two read chunks, so the masker must not
   conclude a byte is clean until a full window has arrived. See the comment in `mask.rs`.
 

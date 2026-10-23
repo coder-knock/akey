@@ -30,8 +30,10 @@ use crate::paths::{FILE_MODE, atomic_write};
 /// Project files are checked into a repository, so they stay group/world readable.
 const PROJECT_FILE_MODE: u32 = 0o644;
 
+/// The MCP server name akey registers.
+const SERVER_NAME: &str = "akey";
 /// The command line every harness must end up running.
-const ARGV: [&str; 2] = ["akey", "mcp"];
+const ARGV: [&str; 2] = [SERVER_NAME, "mcp"];
 
 /// What an existing MCP entry says, normalized across formats.
 ///
@@ -167,16 +169,7 @@ pub fn inspect(harness: &Harness, scope: Scope, home: &Path, cwd: &Path) -> Resu
 /// safely. Nothing is written until the returned plan is applied.
 pub fn plan(harness: &Harness, scope: Scope, home: &Path, cwd: &Path, force: bool) -> Result<Plan> {
     let path = config_path(harness, scope, home, cwd)?;
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(Error::corrupt(format!(
-                "cannot read {}: {err}",
-                path.display()
-            )));
-        }
-    };
+    let text = read_for_edit(&path)?;
 
     let draft = match harness.format {
         ConfigFormat::Json => draft_json(harness, &path, text.as_deref(), force)?,
@@ -188,10 +181,7 @@ pub fn plan(harness: &Harness, scope: Scope, home: &Path, cwd: &Path, force: boo
         path,
         change: draft.0,
         contents: draft.1,
-        mode: match scope {
-            Scope::User => FILE_MODE,
-            Scope::Project => PROJECT_FILE_MODE,
-        },
+        mode: file_mode(scope),
         creates: text.is_none(),
         replaced_detail: draft.2,
     })
@@ -259,37 +249,12 @@ pub fn plan_remove(
     force: bool,
 ) -> Result<RemovePlan> {
     let path = config_path(harness, scope, home, cwd)?;
-    let mode = match scope {
-        Scope::User => FILE_MODE,
-        Scope::Project => PROJECT_FILE_MODE,
+    let mode = file_mode(scope);
+    let Some(text) = read_for_edit(&path)? else {
+        return Ok(RemovePlan::missing(path, mode));
     };
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(RemovePlan {
-                path,
-                change: RemoveChange::Missing,
-                contents: Vec::new(),
-                mode,
-                removed_detail: None,
-            });
-        }
-        Err(err) => {
-            return Err(Error::corrupt(format!(
-                "cannot read {}: {err}",
-                path.display()
-            )));
-        }
-    };
-
     if text.trim().is_empty() {
-        return Ok(RemovePlan {
-            path,
-            change: RemoveChange::Missing,
-            contents: Vec::new(),
-            mode,
-            removed_detail: None,
-        });
+        return Ok(RemovePlan::missing(path, mode));
     }
 
     let draft = match harness.format {
@@ -315,6 +280,38 @@ pub fn apply_remove(plan: &RemovePlan) -> Result<()> {
     atomic_write(&plan.path, &plan.contents, plan.mode)
 }
 
+/// File mode for a planned write. User configs are private; project configs are committed.
+fn file_mode(scope: Scope) -> u32 {
+    match scope {
+        Scope::User => FILE_MODE,
+        Scope::Project => PROJECT_FILE_MODE,
+    }
+}
+
+/// Read a file for a deliberate edit. A missing file is a new document, not an error.
+fn read_for_edit(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(Error::corrupt(format!(
+            "cannot read {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+impl RemovePlan {
+    fn missing(path: PathBuf, mode: u32) -> Self {
+        Self {
+            path,
+            change: RemoveChange::Missing,
+            contents: Vec::new(),
+            mode,
+            removed_detail: None,
+        }
+    }
+}
+
 fn remove_json(harness: &Harness, path: &Path, text: &str, force: bool) -> Result<RemoveDraft> {
     let root = CstRootNode::parse(text, &ParseOptions::default())
         .map_err(|err| corrupt(path, err.to_string()))?;
@@ -327,7 +324,7 @@ fn remove_json(harness: &Harness, path: &Path, text: &str, force: bool) -> Resul
         }
         return Ok((RemoveChange::Missing, Vec::new(), None));
     };
-    let Some(prop) = servers.get("akey") else {
+    let Some(prop) = servers.get(SERVER_NAME) else {
         return Ok((RemoveChange::Missing, Vec::new(), None));
     };
     let view = prop
@@ -355,7 +352,7 @@ fn remove_toml(harness: &Harness, path: &Path, text: &str, force: bool) -> Resul
     let Some(servers) = item.as_table_like() else {
         return Err(corrupt(path, format!("`{}` is not a table", harness.key)));
     };
-    let Some(entry) = servers.get("akey") else {
+    let Some(entry) = servers.get(SERVER_NAME) else {
         return Ok((RemoveChange::Missing, Vec::new(), None));
     };
     let removed_detail = removal_guard(
@@ -372,7 +369,7 @@ fn remove_toml(harness: &Harness, path: &Path, text: &str, force: bool) -> Resul
     else {
         return Err(corrupt(path, format!("`{}` is not a table", harness.key)));
     };
-    servers.remove("akey");
+    servers.remove(SERVER_NAME);
     Ok((
         RemoveChange::Removed,
         finish(doc.to_string()),
@@ -388,7 +385,7 @@ fn remove_yaml(harness: &Harness, path: &Path, text: &str, force: bool) -> Resul
     let Some(servers) = servers.as_mapping() else {
         return Err(corrupt(path, format!("`{}` is not a mapping", harness.key)));
     };
-    let Some(entry) = servers.get("akey") else {
+    let Some(entry) = servers.get(SERVER_NAME) else {
         return Ok((RemoveChange::Missing, Vec::new(), None));
     };
     let removed_detail = removal_guard(
@@ -398,7 +395,7 @@ fn remove_yaml(harness: &Harness, path: &Path, text: &str, force: bool) -> Resul
         force,
     )?;
 
-    doc.try_remove_path(&format!("{}.akey", harness.key))
+    doc.try_remove_path(&format!("{}.{SERVER_NAME}", harness.key))
         .map_err(|err| corrupt(path, err.to_string()))?;
     Ok((
         RemoveChange::Removed,
@@ -489,7 +486,7 @@ fn inspect_json(harness: &Harness, text: &str) -> EntryStatus {
             EntryStatus::Missing
         };
     };
-    let Some(prop) = servers.get("akey") else {
+    let Some(prop) = servers.get(SERVER_NAME) else {
         return EntryStatus::Missing;
     };
     let Some(value) = prop.value().and_then(|value| value.to_serde_value()) else {
@@ -518,7 +515,7 @@ fn draft_json(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
 
     // A mid-file parse failure can leave a property with no readable value; treating that
     // as missing would silently overwrite broken user data, so fail instead.
-    let status = match servers.get("akey") {
+    let status = match servers.get(SERVER_NAME) {
         None => EntryStatus::Missing,
         Some(prop) => {
             let Some(value) = prop.value().and_then(|value| value.to_serde_value()) else {
@@ -535,10 +532,10 @@ fn draft_json(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
 
     let desired = desired_json(harness)?;
     let value = to_cst_input(&desired).expect("desired JSON is always representable in CST");
-    match servers.get("akey") {
+    match servers.get(SERVER_NAME) {
         Some(prop) => prop.set_value(value),
         None => {
-            servers.append("akey", value);
+            servers.append(SERVER_NAME, value);
         }
     }
 
@@ -638,7 +635,7 @@ fn inspect_toml(harness: &Harness, text: &str) -> EntryStatus {
     let Some(servers) = item.as_table_like() else {
         return unreadable(format!("`{}` is not a table", harness.key));
     };
-    let Some(entry) = servers.get("akey") else {
+    let Some(entry) = servers.get(SERVER_NAME) else {
         return EntryStatus::Missing;
     };
     classify(harness, toml_entry_view(entry))
@@ -656,7 +653,7 @@ fn draft_toml(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
             let Some(servers) = item.as_table_like() else {
                 return Err(corrupt(path, format!("`{}` is not a table", harness.key)));
             };
-            match servers.get("akey") {
+            match servers.get(SERVER_NAME) {
                 None => EntryStatus::Missing,
                 Some(entry) => classify_strict(harness, path, toml_entry_view(entry))?,
             }
@@ -678,7 +675,7 @@ fn draft_toml(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
     let Some(servers) = servers_item.as_table_like_mut() else {
         return Err(corrupt(path, format!("`{}` is not a table", harness.key)));
     };
-    servers.insert("akey", toml_entry());
+    servers.insert(SERVER_NAME, toml_entry());
 
     Ok((change, finish(doc.to_string()), replaced_detail))
 }
@@ -710,9 +707,9 @@ fn toml_entry_view(item: &Item) -> EntryView {
 
 fn toml_entry() -> Item {
     let mut table = Table::new();
-    table.insert("command", toml_edit::value("akey"));
+    table.insert("command", toml_edit::value(SERVER_NAME));
     let mut args = TomlArray::new();
-    args.push("mcp");
+    args.push(ARGV[1]);
     table.insert("args", toml_edit::value(args));
     Item::Table(table)
 }
@@ -732,7 +729,7 @@ fn inspect_yaml(harness: &Harness, text: &str) -> EntryStatus {
     let Some(servers) = servers.as_mapping() else {
         return unreadable(format!("`{}` is not a mapping", harness.key));
     };
-    let Some(entry) = servers.get("akey") else {
+    let Some(entry) = servers.get(SERVER_NAME) else {
         return EntryStatus::Missing;
     };
     classify(harness, yaml_entry_view(&entry))
@@ -752,7 +749,7 @@ fn draft_yaml(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
             let Some(servers) = servers.as_mapping() else {
                 return Err(corrupt(path, format!("`{}` is not a mapping", harness.key)));
             };
-            match servers.get("akey") {
+            match servers.get(SERVER_NAME) {
                 None => EntryStatus::Missing,
                 Some(entry) => classify_strict(harness, path, yaml_entry_view(&entry))?,
             }
@@ -764,7 +761,7 @@ fn draft_yaml(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
         return Ok((change, Vec::new(), replaced_detail));
     }
 
-    let entry_path = format!("{}.akey", harness.key);
+    let entry_path = format!("{}.{SERVER_NAME}", harness.key);
     if change == Change::Replaced {
         // The entry is known to exist here; a removal failure means the document changed
         // underneath us, so surface it rather than writing a half-merged entry.
@@ -774,9 +771,9 @@ fn draft_yaml(harness: &Harness, path: &Path, text: Option<&str>, force: bool) -
     let command_path = format!("{entry_path}.command");
     let args_path = format!("{entry_path}.args[0]");
     let enabled_path = format!("{entry_path}.enabled");
-    doc.try_set_path(&command_path, "akey")
+    doc.try_set_path(&command_path, ARGV[0])
         .map_err(|err| corrupt(path, err.to_string()))?;
-    doc.try_set_path(&args_path, "mcp")
+    doc.try_set_path(&args_path, ARGV[1])
         .map_err(|err| corrupt(path, err.to_string()))?;
     doc.try_set_path(&enabled_path, true)
         .map_err(|err| corrupt(path, err.to_string()))?;
@@ -855,7 +852,7 @@ fn classify_strict(harness: &Harness, path: &Path, view: EntryView) -> Result<En
 }
 
 fn entry_pointer(harness: &Harness) -> String {
-    format!("{}.akey", harness.key)
+    format!("{}.{SERVER_NAME}", harness.key)
 }
 
 fn decide(

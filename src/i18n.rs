@@ -196,7 +196,7 @@ pub const fn placeholder_count(template: &str) -> usize {
     count
 }
 
-/// Compile-time guard for [`msg!`]: a translation with a different number of `{}` than the
+/// Compile-time guard for `msg!`: a translation with a different number of `{}` than the
 /// English source would swallow an argument or print a stray placeholder. Catching it while
 /// the translation is being written is the only cheap moment to catch it.
 pub const fn assert_placeholder_parity(en: &str, zh_cn: &str) {

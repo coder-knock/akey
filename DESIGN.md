@@ -42,6 +42,8 @@ src/
   output.rs          信封序列化 · stdout-stderr 纪律 · 遮蔽器 Masker
   paths.rs           AKEY_HOME / repo 解析 · 权限位 · 原子写
   config.rs          config.toml
+  i18n.rs            en / zh-CN 文案 · 语言判定
+  agents_md.rs       金库仓库自带的 AGENTS.md
   crypto/
     identity.rs      X25519 身份：生成 / 读写 / 0600 / 自解密
     boxcrypto.rs     多收件人加解密 · passphrase 加解密
@@ -50,16 +52,30 @@ src/
     model.rs         Vault / Entry / Field / TokenMeta 类型
     store.rs         载入 / 保存 / 锁 / 加解密编排
     merge.rs         三方合并（纯函数，无 IO）
+    generator.rs     Password / passphrase 生成
+    migrate.rs       金库格式前向迁移
+    recipients.rs    recipients.json（仅公钥）
   reference.rs       引用解析与求值
-  inject.rs          run / inject / 遮蔽管线
-  sync/git.rs        git 子进程封装（fetch/show/commit/push/merge-base）
+  inject/
+    mod.rs           run / inject 编排
+    run.rs           环境装配 + 子进程执行
+    mask.rs          子进程输出的流式遮蔽
+  sync/
+    mod.rs           同步 / 冲突 / 合并编排
+    git.rs           git 子进程封装（fetch/show/commit/push/merge-base）
   audit.rs           append-only 日志
   cmd/*.rs           每个命令一个模块
   agent/
     registry.rs      harness 表：作用域 / 配置文件 / skill 根 / 原生 CLI
     config.rs        配置格式适配（JSON/JSONC/TOML/YAML）· 匹配 · 规划 · 原子写
     skill.rs         内嵌 SKILL.md · sidecar 记账 · --force 语义
-    mod.rs           选择 / 原生委派 / 计划-应用编排 / 报告
+    selection.rs     默认 / 显式选择规则
+    native.rs        原生 CLI 查找 · 调用 · 失败诊断
+    install.rs       安装生命周期 + 报告
+    uninstall.rs     卸载生命周期 + 报告
+    inspect.rs       list / status / print
+    mod.rs           模块出口 · 重导出 · display_path
+    tests.rs         harness 测试
 tests/
   contract.rs        信封 / 退出码 / stdout-stderr
   reference.rs       引用解析表驱动
@@ -643,13 +659,18 @@ gui/
 
 `akey mcp` 只提供元数据，但要让它真正被 agent 用上，必须把它注册进每个 harness 的配置，并放一份 `SKILL.md`。如果每个 agent 写一段专用逻辑，代码会变成 N 份几乎相同的安装器；如果抽成 trait，又会把「配置长什么样」这种纯数据藏进 `impl` 里。这里选的是**数据驱动**：harness 是一行数据，配置格式是一个适配器。
 
-### 19.1 三层
+### 19.1 分层
 
 | 层 | 文件 | 职责 | 不知道什么 |
 |---|---|---|---|
 | 注册表 | `registry.rs` | harness 的 id / 别名 / 作用域 / 配置候选路径 / 格式 / 入口语法 / skill 根 / 可选的原生 CLI | 不知道文件内容如何解析 |
 | 适配器 | `config.rs` | 按格式读取、匹配、规划、结构化写入 JSON/JSONC/TOML/YAML | 不知道 harness 叫什么 |
-| 编排 | `mod.rs` | 选择、原生委派、计划-应用、安装与卸载报告 | 不知道某个具体 agent 的路径 |
+| skill | `skill.rs` | 内嵌 `SKILL.md`、sidecar 记账、覆盖与卸载判定 | 不知道 MCP 配置怎么写 |
+| 选择 | `selection.rs` | 默认 / 显式选择、作用域过滤 | 不知道具体文件格式 |
+| 原生委派 | `native.rs` | 查找并调用 harness CLI，捕获输出并诊断失败 | 不知道配置格式 |
+| 生命周期 | `install.rs` / `uninstall.rs` | 全量规划后再应用、生成安装 / 卸载报告 | 不知道某个具体 agent 的路径 |
+| 只读检查 | `inspect.rs` | `list` / `status` / `print` | 不写任何文件 |
+| 公共出口 | `mod.rs` | 重导出与 `display_path` | 不含生命周期逻辑 |
 
 `Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`，移除永远经过 `config::plan_remove` / `config::apply_remove`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可。`native_cli` 是 `Option`：Cursor、Kiro、Devin 没有 akey 可委托的 CLI，注册表直接写 `None`，安装器不会去找可执行文件，也不会假装存在原生路径。
 
@@ -696,7 +717,7 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 
 `AKEY_AGENT_HOME` 可覆盖主目录，`HOME` / `USERPROFILE` 是默认值。它**不是** `AKEY_HOME`：后者是 akey 自己的私有目录（`~/.config/akey`），而 harness 配置在真实主目录里。
 
-选择规则区分「默认」与「显式」：
+`selection.rs` 把选择规则限定为「默认」与「显式」两种：
 
 - `status` / `print` 不点名 → 选中所有支持该作用域的 harness，静默跳过不支持的。
 - 点名了 `codex --scope project` → 报错。用户既然打了名字，就需要知道 Codex 没有 project 作用域，而不是安静地什么都不做。
@@ -704,7 +725,7 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 
 ### 19.7 卸载与共享 skill
 
-`uninstall` 的语义是「移除 akey 写进去的东西」，不是「恢复安装前的备份」：
+`uninstall.rs` 的语义是「移除 akey 写进去的东西」，不是「恢复安装前的备份」：
 
 - 配置里没有 `akey` 条目 → no-op；有且匹配 → 删除该条目；有但内容不同 → 冲突，`--force` 才删。
 - 配置文件本身**永不删除**，只编辑其中的 `akey` 键；清空后的容器（如空的 `mcpServers`）可以留在原处。
@@ -716,9 +737,9 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 1. 在 `registry.rs` 的 `HARNESSES` 加一行：id、别名、作用域、配置候选、格式、语法、入口 key、skill 根、`native_cli`、文档链接；有原生 CLI 时再在 `native_args` 补一条 `mcp add` 语法，没有就写 `None`，安装会直接走结构化编辑。
 2. 配置格式是新的 → 在 `ConfigFormat` 加变体，并在 `config.rs` 补 inspect / draft 两条分支。
 3. 入口语法是新的 → 在 `McpStyle` 加变体，同样补两条分支。
-4. 在 `docs/AGENT-INTEGRATION.md` 加对应小节，并加一个使用临时 home 的测试。
+4. 在 `docs/AGENT-INTEGRATION.md` §6.1 的差异列表补一条，并加一个使用临时 home 的测试。
 
-不需要改 `cmd/agent.rs`，也不需要改报告层。
+不需要改 `cmd/agent.rs`、`mod.rs` 或报告层：报告类型与对应生命周期同文件，并按注册表生成。
 
 ### 19.9 非目标
 
