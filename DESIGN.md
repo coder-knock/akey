@@ -67,7 +67,12 @@ src/
   cmd/*.rs           每个命令一个模块
   agent/
     registry.rs      harness 表：作用域 / 配置文件 / skill 根 / 原生 CLI
-    config.rs        配置格式适配（JSON/JSONC/TOML/YAML）· 匹配 · 规划 · 原子写
+    config.rs        配置流水线：匹配 · 规划 · 原子写 · 按格式分发
+    config/
+      json.rs        JSON/JSONC 适配（CST，保留注释）
+      toml.rs        TOML 适配（toml_edit）
+      yaml.rs        YAML 适配（yaml_edit）
+      tests.rs       配置适配测试
     skill.rs         内嵌 SKILL.md · sidecar 记账 · --force 语义
     selection.rs     默认 / 显式选择规则
     native.rs        原生 CLI 查找 · 调用 · 失败诊断
@@ -664,7 +669,7 @@ gui/
 | 层 | 文件 | 职责 | 不知道什么 |
 |---|---|---|---|
 | 注册表 | `registry.rs` | harness 的 id / 别名 / 作用域 / 配置候选路径 / 格式 / 入口语法 / skill 根 / 可选的原生 CLI | 不知道文件内容如何解析 |
-| 适配器 | `config.rs` | 按格式读取、匹配、规划、结构化写入 JSON/JSONC/TOML/YAML | 不知道 harness 叫什么 |
+| 适配器 | `config.rs` + `config/{json,toml,yaml}.rs` | 匹配与决策流水线；按格式结构化读写 JSON/JSONC/TOML/YAML | 不知道 harness 叫什么 |
 | skill | `skill.rs` | 内嵌 `SKILL.md`、sidecar 记账、覆盖与卸载判定 | 不知道 MCP 配置怎么写 |
 | 选择 | `selection.rs` | 默认 / 显式选择、作用域过滤 | 不知道具体文件格式 |
 | 原生委派 | `native.rs` | 查找并调用 harness CLI，捕获输出并诊断失败 | 不知道配置格式 |
@@ -735,8 +740,8 @@ harness 自己的 CLI 最懂自己的配置，但它通常没有「替换某个�
 ### 19.8 新增一个 harness
 
 1. 在 `registry.rs` 的 `HARNESSES` 加一行：id、别名、作用域、配置候选、格式、语法、入口 key、skill 根、`native_cli`、文档链接；有原生 CLI 时再在 `native_args` 补一条 `mcp add` 语法，没有就写 `None`，安装会直接走结构化编辑。
-2. 配置格式是新的 → 在 `ConfigFormat` 加变体，并在 `config.rs` 补 inspect / draft 两条分支。
-3. 入口语法是新的 → 在 `McpStyle` 加变体，同样补两条分支。
+2. 配置格式是新的 → 在 `ConfigFormat` 加变体，在 `config/` 下新增适配模块，并在 `config.rs` 的 inspect / draft / remove 分发点接入。
+3. 入口语法是新的 → 在 `McpStyle` 加变体，并补齐 `EntryView::problems` 与各格式的写入形状。
 4. 在 `docs/AGENT-INTEGRATION.md` §6.1 的差异列表补一条，并加一个使用临时 home 的测试。
 
 不需要改 `cmd/agent.rs`、`mod.rs` 或报告层：报告类型与对应生命周期同文件，并按注册表生成。

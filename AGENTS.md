@@ -56,7 +56,8 @@ src/inject/mask.rs       streaming redaction of child process output
 src/inject/run.rs        env assembly + subprocess execution
 src/cmd/                 one file per command group; `cli.rs` is the source of truth
 src/agent/registry.rs    harness table: scopes / config candidates / skill roots / native CLI
-src/agent/config.rs      JSON/JSONC/TOML/YAML adapters; inspect / plan / apply
+src/agent/config.rs      config pipeline: match / plan / apply, dispatches by format
+src/agent/config/        per-format adapters (JSON/JSONC, TOML, YAML) + tests
 src/agent/skill.rs       embedded SKILL.md + sidecar ownership
 src/agent/selection.rs   explicit vs default harness selection
 src/agent/native.rs      native CLI lookup / invocation / failure diagnostics
