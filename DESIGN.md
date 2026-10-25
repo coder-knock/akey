@@ -65,6 +65,14 @@ src/
     git.rs           git 子进程封装（fetch/show/commit/push/merge-base）
   audit.rs           append-only 日志
   cmd/*.rs           每个命令一个模块
+  cmd/deliver/
+    mod.rs           命令出口 · 共享 IO helper
+    handoff.rs       read / run / inject
+    export.rs        export
+    import.rs        import
+    doc.rs           doc get / put
+    mcp.rs           mcp JSON-RPC
+    tests.rs         命令层测试
   agent/
     registry.rs      harness 表：作用域 / 配置文件 / skill 根 / 原生 CLI
     config.rs        配置流水线：匹配 · 规划 · 原子写 · 按格式分发
