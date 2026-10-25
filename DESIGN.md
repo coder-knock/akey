@@ -109,7 +109,11 @@ src/
     native.rs        原生 CLI 查找 · 调用 · 失败诊断
     install.rs       安装生命周期 + 报告
     uninstall.rs     卸载生命周期 + 报告
-    inspect.rs       list / status / print
+    inspect/
+      mod.rs         模块出口 · 重导出
+      list.rs        注册表描述（不读文件）
+      status.rs      只读状态巡检
+      print.rs       安装内容预览（不写文件）
     mod.rs           模块出口 · 重导出 · display_path
     tests.rs         harness 测试
 tests/

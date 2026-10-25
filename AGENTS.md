@@ -66,7 +66,7 @@ src/agent/selection.rs   explicit vs default harness selection
 src/agent/native.rs      native CLI lookup / invocation / failure diagnostics
 src/agent/install.rs     install lifecycle + report
 src/agent/uninstall.rs   uninstall lifecycle + report
-src/agent/inspect.rs     list / status / print
+src/agent/inspect/       read-only commands split by command (list / status / print)
 src/agent/mod.rs         public surface + display_path
 src/agent/tests.rs       harness tests
 assets/AGENTS.vault.md   shipped into every vault repo at `akey init`
