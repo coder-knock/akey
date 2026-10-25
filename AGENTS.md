@@ -53,7 +53,7 @@ src/vault/merge.rs       merge3 — pure, deterministic, no IO
 src/crypto/              the ONLY place `age` is called
 src/reference.rs         akey:// parsing and resolution
 src/inject/mask.rs       streaming redaction of child process output
-src/inject/run.rs        env assembly + subprocess execution
+src/inject/run/          env assembly (resolve) + subprocess execution and masking (spawn)
 src/cmd/                 one file per command group; `cli.rs` is the source of truth
 src/cmd/deliver/         delivery commands split by responsibility (handoff / export / import / doc / mcp)
 src/cmd/entries/         entry commands split by responsibility (read / write / input / template / lifecycle / conflict)

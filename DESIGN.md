@@ -58,7 +58,11 @@ src/
   reference.rs       引用解析与求值
   inject/
     mod.rs           run / inject 编排
-    run.rs           环境装配 + 子进程执行
+    run/
+      mod.rs         Injection · 模块出口
+      resolve.rs     环境装配 · 引用求值 · Touch
+      spawn.rs       子进程执行 · 输出遮蔽
+      tests.rs       机制层测试
     mask.rs          子进程输出的流式遮蔽
   sync/
     mod.rs           同步 / 冲突 / 合并编排
