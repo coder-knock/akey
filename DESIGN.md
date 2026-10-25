@@ -709,7 +709,7 @@ gui/
 | 选择 | `selection.rs` | 默认 / 显式选择、作用域过滤 | 不知道具体文件格式 |
 | 原生委派 | `native.rs` | 查找并调用 harness CLI，捕获输出并诊断失败 | 不知道配置格式 |
 | 生命周期 | `install.rs` / `uninstall.rs` | 全量规划后再应用、生成安装 / 卸载报告 | 不知道某个具体 agent 的路径 |
-| 只读检查 | `inspect.rs` | `list` / `status` / `print` | 不写任何文件 |
+| 只读检查 | `inspect/{list,status,print}.rs` | `list` / `status` / `print` | 不写任何文件 |
 | 公共出口 | `mod.rs` | 重导出与 `display_path` | 不含生命周期逻辑 |
 
 `Harness` 没有方法能「安装自己」。它只回答 `config_path`、`skill_dir`、`native_args` 这类纯查询；写入永远经过同一个 `config::plan` / `config::apply`，移除永远经过 `config::plan_remove` / `config::apply_remove`。因此新增一个 harness 通常只是往 `HARNESSES` 加一行；如果它有原生 CLI，再在 `native_args` 里补上该 CLI 的 `mcp add` 语法即可。`native_cli` 是 `Option`：Cursor、Kiro、Devin 没有 akey 可委托的 CLI，注册表直接写 `None`，安装器不会去找可执行文件，也不会假装存在原生路径。
