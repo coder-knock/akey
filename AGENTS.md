@@ -56,6 +56,7 @@ src/inject/mask.rs       streaming redaction of child process output
 src/inject/run.rs        env assembly + subprocess execution
 src/cmd/                 one file per command group; `cli.rs` is the source of truth
 src/cmd/deliver/         delivery commands split by responsibility (handoff / export / import / doc / mcp)
+src/cmd/entries/         entry commands split by responsibility (read / write / input / template / lifecycle / conflict)
 src/agent/registry.rs    harness table: scopes / config candidates / skill roots / native CLI
 src/agent/config.rs      config pipeline: match / plan / apply, dispatches by format
 src/agent/config/        per-format adapters (JSON/JSONC, TOML, YAML) + tests

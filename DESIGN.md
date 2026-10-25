@@ -73,6 +73,15 @@ src/
     doc.rs           doc get / put
     mcp.rs           mcp JSON-RPC
     tests.rs         命令层测试
+  cmd/entries/
+    mod.rs           命令出口 · 共享错误映射
+    read.rs          get / list
+    write.rs         set / edit
+    input.rs         赋值解析 · stdin · 密码生成
+    template.rs      template · --template
+    lifecycle.rs     rm / restore / cp / mv
+    conflict.rs      conflicts / resolve
+    tests.rs         命令层测试
   agent/
     registry.rs      harness 表：作用域 / 配置文件 / skill 根 / 原生 CLI
     config.rs        配置流水线：匹配 · 规划 · 原子写 · 按格式分发
@@ -470,7 +479,7 @@ token    ::= "letters" | "digits" | "symbols"
 
 `token` 之间以 OR 语义合并池；多 token = 多个池取并集。`passphrase` 与其它 token 互斥，**不能** 同时出现——给出 `passphrase,<n>` 时 `<n>` 是词数（默认 5），其余 token 一律拒（exit 2）。
 
-**采样**：从 CSPRNG 一次性取够字节，按 256 → pool_size 的模映射回池；模偏置通过 `limit = 256 - (256 % size)` 拒绝均匀化（已是 `entries.rs::password_from_bytes` 的现有实现，扩展时不动它，只把 `pool` 的生成抽到一个新模块 `vault::generator::pool_for`）。
+**采样**：从 CSPRNG 一次性取够字节，按 256 → pool_size 的模映射回池；模偏置通过 `limit = 256 - (256 % size)` 拒绝均匀化（已是 `entries/input.rs::password_from_bytes` 的现有实现，扩展时不动它，只把 `pool` 的生成抽到一个新模块 `vault::generator::pool_for`）。
 
 ### 17.2 Diceware 词表
 
