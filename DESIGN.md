@@ -82,6 +82,16 @@ src/
     lifecycle.rs     rm / restore / cp / mv
     conflict.rs      conflicts / resolve
     tests.rs         命令层测试
+  cmd/admin/
+    mod.rs           命令出口 · 共享 Git / 错误 helper
+    init.rs          init（新建 / 接入远端）
+    devices.rs       devices（信任 / 撤销）
+    passphrase.rs    恢复密码获取与长度策略
+    recovery.rs      recovery（设置 / 解锁 / 轮换）
+    token.rs         token（能力令牌）
+    diagnostics.rs   whoami / doctor
+    reference.rs     log / schema / completion
+    tests.rs         命令层测试
   agent/
     registry.rs      harness 表：作用域 / 配置文件 / skill 根 / 原生 CLI
     config.rs        配置流水线：匹配 · 规划 · 原子写 · 按格式分发
